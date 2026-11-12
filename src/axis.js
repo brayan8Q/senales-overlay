@@ -377,6 +377,8 @@ function labelOffset(scale, gridRows) {
   return best.matched >= 2 && best.matched >= scale.rows.length - 1 ? best.offset : null;
 }
 
+let offsetCache = { key: '', uses: 0, offset: null };
+
 /**
  * Lee el eje de precios de la imagen de la zona.
  * @returns {{ perPixel:number, pip:number, decimals:number, labels:number, anchored:boolean,
@@ -388,7 +390,15 @@ function readAxis(rgba, width, height, minX = 0) {
   if (loadTemplates().length === 0) return null;
   const scale = fitScale(readLabels(rgba, width, height, minX));
   if (!scale) return null;
-  const offset = labelOffset(scale, findGridLines(rgba, width, height));
+  // Buscar la cuadricula recorre toda la imagen y es lo mas lento del eje. El desfase entre los
+  // numeros y sus lineas es fijo mientras el eje no cambie, asi que solo se recalcula cuando
+  // cambian los numeros o su posicion (y, por si acaso, cada cierto numero de lecturas).
+  const key = `${width}x${height}|${scale.rows.map((y) => y.toFixed(1)).join(',')}|${scale.perPixel}`;
+  if (offsetCache.key !== key || offsetCache.uses >= 40) {
+    offsetCache = { key, uses: 0, offset: labelOffset(scale, findGridLines(rgba, width, height)) };
+  }
+  offsetCache.uses++;
+  const offset = offsetCache.offset;
   const raw = scale.at;
   return {
     perPixel: scale.perPixel,

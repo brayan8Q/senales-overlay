@@ -2,3 +2,5 @@
 node_modules/
 # Capturas de diagnóstico
 capturas/
+# Paquete para instalar en otra computadora (se vuelve a generar)
+dist/

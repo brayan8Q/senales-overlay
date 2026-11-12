@@ -23,7 +23,8 @@
  * Hacen falta al menos dos votos netos hacia el mismo lado. Si la vela actual
  * ya esta muy extendida no se da senal a su favor: el movimiento ya ocurrio.
  */
-const { trendSignal, candlePattern } = require('./signal');
+const { trendSignal, candlePattern, climax } = require('./signal');
+const { findFormation } = require('./formations');
 const { summarize } = require('./score');
 const { sameCandles } = require('./tracker');
 
@@ -160,11 +161,13 @@ function tickMomentum(ticks, now) {
  * @param {{vote:number,text:string}} [options.context]  Resumen de las 8 lecturas (ver readings.js).
  * @param {{kind:string|null,vote:number,text:string}} [options.regime]  Patron medido en el precio
  *        real: si viene continuando o rebotando (ver regime.js).
+ * @param {{vote:number,kind:string,text:string}} [options.formation]  Figura de varias velas (doble
+ *        techo, estrella, tres soldados...; ver formations.js).
  * @param {{vote:number,text:string}} [options.memory]  Memoria del mercado: que paso otras veces en
  *        una situacion como esta (ver memory.js).
  * @returns {{ dir: 'up'|'down'|null, reason: string, votes: number, confidence: string }}
  */
-function decide(trend, pattern, moves, { force = false, fallback = null, ticks = null, context = null, regime = null, memory = null } = {}) {
+function decide(trend, pattern, moves, { force = false, fallback = null, ticks = null, context = null, regime = null, memory = null, formation = null } = {}) {
   // Patron medido en el precio real (ver regime.js). Si en esta grafica el precio viene
   // CONTINUANDO, no tiene sentido apostar al regreso de una vela estirada: se quita el bloqueo.
   if (regime && regime.kind === 'continua' && pattern.blocks) {
@@ -216,6 +219,11 @@ function decide(trend, pattern, moves, { force = false, fallback = null, ticks =
   else if (kind === 'rebota') votes = regimeVote + contextReverse + stretchedVote + exhaustionVote;
   else votes = followers + contextVote + exhaustionVote;
   votes += memoryVote;
+  // Figura de varias velas (ver formations.js). Las de giro no cuentan si el precio viene
+  // continuando, ni las de continuacion si viene rebotando: se le cree mas a lo medido.
+  const formationFits = Boolean(formation) && (!kind || (kind === 'continua') === (formation.kind === 'follow'));
+  const formationVote = formationFits ? clamp2(formation.vote) : 0;
+  votes += formationVote;
   const dir = votes >= VOTES_NEEDED ? 'up' : votes <= -VOTES_NEEDED ? 'down' : null;
 
   const trendText = trend.dir === 'up' ? 'hacia arriba' : trend.dir === 'down' ? 'hacia abajo' : 'de lado';
@@ -223,7 +231,7 @@ function decide(trend, pattern, moves, { force = false, fallback = null, ticks =
   const streakText = streak >= 2 ? `, ${streak} tramos seguidos hacia ${word}` : '';
   const contextText = context ? ` · lecturas: ${context.text}` : '';
   const exhaustedText = exhausted ? 'Vela agotada: ya estirada y el precio giró desde su extremo. ' : '';
-  const regimeText = (regime && regime.kind ? `Patrón medido: ${regime.text}. ` : '') + (memoryVote ? `Memoria: ${memory.text}. ` : '');
+  const regimeText = (regime && regime.kind ? `Patrón medido: ${regime.text}. ` : '') + (memoryVote ? `Memoria: ${memory.text}. ` : '') + (formationVote ? `Figura: ${formation.text}. ` : '');
   const summary = `${regimeText}${exhaustedText}Precio ${now.text}${streakText} · vela actual: ${pattern.text} · velas ${trendText}${contextText}.`;
 
   // Las lecturas por separado, para mostrarlas en chiquito en el panel.
@@ -474,11 +482,11 @@ function createTimedTracker() {
             ? candlePattern(current, candles[candles.length - 2], completed)
             : { vote: 0, text: 'tapada por un aviso de la plataforma', short: 'tapada' };
           const fallback = current.dir === 'up' || current.dir === 'down' ? current.dir : null;
-          const rules = decide(trend, pattern, moves, { force, fallback, ticks: tickMomentum(recentTicks, now), context, regime, memory });
+          const rules = decide(trend, pattern, moves, { force, fallback, ticks: tickMomentum(recentTicks, now), context, regime, memory, formation: findFormation(completed) });
           // Si la IA ya opino sobre este tramo, manda ella; si no, las reglas. Si hay que dar
           // siempre un lado y la IA no eligio ninguno, se usa el de las reglas.
-          const useAi = Boolean(advice) && (advice.dir !== null || !force);
-          const dir = useAi ? advice.dir : rules.dir;
+          let useAi = Boolean(advice) && (advice.dir !== null || !force);
+          let dir = useAi ? advice.dir : rules.dir;
           let reason = useAi ? advice.reason : rules.reason;
           let confidence = useAi ? advice.confidence || (dir ? 'media' : 'ninguna') : rules.confidence;
           // La IA contesto con datos de hace unos segundos. Si en este instante el precio va
@@ -487,6 +495,37 @@ function createTimedTracker() {
           if (useAi && dir && liveNow.vote === (dir === 'up' ? -2 : 2)) {
             confidence = 'baja';
             reason = `Ojo: ahora mismo el precio va en contra (${liveNow.text}). ${reason}`;
+          }
+          // FRENO: no perseguir un movimiento agotado. Si el precio ya recorrio mucho en pocas
+          // velas y esta en el extremo de lo que se ve, una senal en esa misma direccion (de la
+          // IA o de las reglas) es apostar a que siga justo donde suele darse la vuelta.
+          //   - Si ya hay senal de giro (el precio giro desde el extremo, o la vela en curso
+          //     rechaza: mecha larga, envolvente), la senal pasa al lado contrario.
+          //   - Si no la hay: sin senal; o, si hay que dar siempre un lado, tambien el contrario
+          //     (el rebote), marcado como "confianza baja".
+          // No se aplica si esta medido que en esta grafica el precio viene CONTINUANDO, ni a
+          // plazos cortos (menos de 30 s): ahi lo que manda es el movimiento del instante.
+          const longTrade = cycleMs >= 30000;
+          const spent = longTrade && formingOk && !(regime && regime.kind === 'continua') ? climax(candles) : null;
+          if (spent && dir === spent.dir) {
+            const back = spent.dir === 'down' ? 'up' : 'down';
+            const sign = back === 'up' ? 1 : -1;
+            const turned = liveNow.turn === back || pattern.vote * sign > 0;
+            if (turned) {
+              dir = back;
+              useAi = false;
+              confidence = 'media';
+              reason = `Giro tras un movimiento agotado: ${spent.text}, y ya hay señal de vuelta (${liveNow.turn === back ? liveNow.text : pattern.text}).`;
+            } else if (force) {
+              dir = back;
+              useAi = false;
+              confidence = 'baja';
+              reason = `Movimiento agotado: ${spent.text}. Ahí suele darse la vuelta, pero todavía no hay señal de giro.`;
+            } else {
+              dir = null;
+              confidence = 'ninguna';
+              reason = `No se persigue un movimiento agotado: ${spent.text}. Espero la señal de giro.`;
+            }
           }
           pending = {
             dir,
@@ -536,6 +575,7 @@ function createTimedTracker() {
         moves, // movimientos por tramos y lecturas finas (para quien opine sobre la proxima senal)
         ticks: recentTicks,
         readings,
+        formation: status === 'ok' ? findFormation(completed) : null, // figura de varias velas, si hay
         live: summarize(live, payout),
         visible: null, // el repaso por velas no aplica a este modo
       };

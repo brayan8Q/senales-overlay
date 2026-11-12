@@ -23,6 +23,7 @@ const { decide, tickMomentum } = require('../src/timed');
 const { trendSignal, candlePattern } = require('../src/signal');
 const { computeReadings } = require('../src/readings');
 const { measureRegime } = require('../src/regime');
+const { findFormation } = require('../src/formations');
 
 const TICK_MS = 300;
 const CANDLE_TICKS = 50; // velas de 15 s
@@ -152,7 +153,9 @@ function run(price, horizonTicks, options = {}) {
       const from = Math.max(0, i - REGIME_TICKS);
       regime = measureRegime(track.slice(from, i + 1), horizonTicks * TICK_MS, now);
     }
-    const decision = decide(trend, pattern, moves, { force: true, ticks: live, context, regime, fallback: forming.dir === 'flat' ? null : forming.dir });
+    const formation = options.formations === false ? null : findFormation(visible.slice(0, -1));
+    const decision = decide(trend, pattern, moves, { force: true, ticks: live, context, regime, formation, fallback: forming.dir === 'flat' ? null : forming.dir });
+    if (formation) add('figura: ' + formation.name, formation.vote, sign(px(i + horizonTicks) - px(i)));
     if (regime) add('  patrón: ' + (regime.kind || 'sin patrón claro'), decision.dir === 'up' ? 1 : -1, sign(px(i + horizonTicks) - px(i)));
 
     const outcome = sign(px(i + horizonTicks) - px(i));

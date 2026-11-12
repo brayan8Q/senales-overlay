@@ -221,10 +221,11 @@ function renderScan(s) {
   renderEntry(scan);
   const state = scan.verified ? 'lectura verificada ✓' : 'verificando lectura…';
   const saved = scan.saved ? ` · ${scan.saved} en memoria` : '';
+  const rate = scan.rate ? ` · ${scan.rate} lecturas/s` : '';
   $('scan-label').textContent =
     scan.mode === 'signal'
-      ? `SIGUIENDO LA VELA ACTUAL · ${state}`
-      : `ESCANEANDO · ${scan.candles.length} velas${saved} · ${state}${who}`;
+      ? `SIGUIENDO LA VELA ACTUAL · ${state}${rate}`
+      : `ESCANEANDO · ${scan.candles.length} velas${saved} · ${state}${rate}${who}`;
 }
 
 /** Coloca un elemento del escáner (en puntos, relativos a la zona). */
@@ -265,7 +266,8 @@ function renderCurrentCandle(c) {
   // Rótulo encima de la vela: su patrón y el tamaño del cuerpo.
   const body = c.bodyPips === null ? '' : ` · cuerpo ${c.up ? '+' : '−'}${c.bodyPips} pips`;
   const info = placeScan('scan-info', { left: center, top: Math.max(22, c.high - 12) });
-  info.textContent = c.covered ? 'vela actual tapada: última lectura buena' : `vela actual: ${c.pattern || (c.up ? 'verde' : 'roja')}${body}`;
+  const figure = c.figure ? ` · figura: ${c.figure}` : '';
+  info.textContent = c.covered ? 'vela actual tapada: última lectura buena' : `vela actual: ${c.pattern || (c.up ? 'verde' : 'roja')}${body}${figure}`;
   // Reloj de la vela: cuánto lleva de lo que dura.
   if (c.seconds && c.elapsed !== null) {
     const clock = placeScan('scan-clock', { left: c.x - 1, width: c.w + 2, top: c.low + 8 });
@@ -422,14 +424,17 @@ api.onState((s) => {
   const n = t.wins + t.losses;
   $('tr-wins').textContent = t.wins;
   $('tr-losses').textContent = t.losses;
+  // Empates (globo amarillo): se muestran aparte y no entran en el porcentaje.
+  $('tr-ties').textContent = t.ties || 0;
+  $('tr-ties').classList.toggle('hidden', !t.ties);
   $('tr-bar').style.width = n ? `${(t.wins / n) * 100}%` : '0';
   $('tr-bar').parentElement.classList.toggle('empty', n === 0);
   const rate = $('tr-rate');
   if (n === 0) {
     rate.className = '';
-    rate.textContent = `Sin operaciones · mín. ${t.breakEven} %`;
+    rate.textContent = t.ties ? `${t.ties} ${t.ties === 1 ? 'empate' : 'empates'} · mín. ${t.breakEven} %` : `Sin operaciones · mín. ${t.breakEven} %`;
   } else {
-    rate.textContent = `${t.hitRate} % (${t.wins}/${n}) · mín. ${t.breakEven} %`;
+    rate.textContent = `${t.hitRate} % (${t.wins}/${n})${t.ties ? ` · ${t.ties} ${t.ties === 1 ? 'empate' : 'empates'}` : ''} · mín. ${t.breakEven} %`;
     // Rojo: por debajo del mínimo. Amarillo: arriba pero puede ser suerte. Verde: arriba con margen.
     rate.className = t.hitRate < t.breakEven ? 'bad' : /suerte|todavía/.test(t.verdict) ? 'unsure' : 'good';
   }

@@ -133,6 +133,7 @@ function trendSignal(candles) {
  * Es simetrica: la misma vela volteada da el voto y el bloqueo contrarios.
  */
 const EXTENDED_FACTOR = 1.5; // cuerpo >= 1.5 veces el cuerpo tipico = vela muy extendida
+const SMALL_FACTOR = 0.5; // cuerpo de menos de la mitad del tipico = vela pequena: aun no tiene fuerza
 
 function candlePattern(candle, previous, context = []) {
   if (!candle) return { vote: 0, text: 'sin vela en curso' };
@@ -157,8 +158,8 @@ function candlePattern(candle, previous, context = []) {
     .slice(-8)
     .map((c) => Math.abs(c.close - c.open))
     .sort((a, b) => a - b);
+  const typicalBody = bodies.length >= 4 ? bodies[Math.floor((bodies.length - 1) / 2)] : 0;
   if (bodies.length >= 4 && (up || down)) {
-    const typicalBody = bodies[Math.floor((bodies.length - 1) / 2)];
     if (typicalBody > 0 && body >= typicalBody * EXTENDED_FACTOR && body >= range * 0.5) {
       return {
         vote: 0,
@@ -180,9 +181,59 @@ function candlePattern(candle, previous, context = []) {
   }
 
   if (body >= range * 0.6) {
+    // "Fuerte" es fuerte comparado con las velas ANTERIORES. Una vela que acaba de abrir es casi
+    // toda cuerpo aunque mida dos pixeles: eso todavia no es fuerza y no vota.
+    if (typicalBody > 0 && body < typicalBody * SMALL_FACTOR) {
+      return { vote: 0, text: up ? 'verde pequeña (aún sin fuerza)' : 'roja pequeña (aún sin fuerza)' };
+    }
     return up ? { vote: 1, text: 'cuerpo fuerte verde' } : { vote: -1, text: 'cuerpo fuerte rojo' };
   }
   return { vote: 0, text: up ? 'verde sin fuerza' : down ? 'roja sin fuerza' : 'sin dirección' };
 }
 
-module.exports = { signalFor, trendSignal, candlePattern, slope, ema, rsi, MIN_CANDLES };
+/**
+ * Movimiento agotado ("ya reventó"): el precio recorrió mucho en pocas velas y esta en el
+ * extremo de todo lo que se ve. Ahi es donde mas se pierde persiguiendo: la tendencia, la EMA
+ * y el momentum dicen "sigue" justo cuando el movimiento ya se gasto.
+ *
+ * Se mira el HISTORIAL, no la vela suelta:
+ *   - cuanto cayo (o subio) el precio desde el tope de las ultimas CLIMAX_WINDOW velas,
+ *     medido en velas tipicas de esta grafica;
+ *   - si el precio esta pegado al minimo (o maximo) de las ultimas 20 velas.
+ *
+ * @param {Array} candles  Velas, la ultima en curso (mayor = mas alto).
+ * @returns {{dir:'up'|'down', units:number, text:string}|null}  dir = hacia donde fue el
+ *          movimiento agotado (la direccion que NO hay que perseguir).
+ */
+const CLIMAX_WINDOW = 6; // velas en las que se mide el recorrido
+const CLIMAX_UNITS = 3; // recorrido minimo, en velas tipicas
+const CLIMAX_EDGE = 0.75; // que tan pegado al extremo debe estar el precio, en velas tipicas
+
+function climax(candles) {
+  if (!candles || candles.length < 8) return null;
+  const recent = candles.slice(-20);
+  const ranges = recent.map((c) => c.high - c.low).sort((a, b) => a - b);
+  const unit = ranges[Math.floor((ranges.length - 1) / 2)] || 1;
+  const price = candles[candles.length - 1].close;
+  const window = candles.slice(-CLIMAX_WINDOW);
+  // Se mide con los CUERPOS, no con las mechas: una mecha larga en el piso (el precio bajo y lo
+  // regresaron) no quita que el precio este en el piso; al contrario, es otra senal de agotamiento.
+  const bodyTop = (c) => Math.max(c.open, c.close);
+  const bodyBottom = (c) => Math.min(c.open, c.close);
+  const top = Math.max(...window.map(bodyTop));
+  const bottom = Math.min(...window.map(bodyBottom));
+  const highest = Math.max(...recent.map(bodyTop));
+  const lowest = Math.min(...recent.map(bodyBottom));
+  const fall = (top - price) / unit;
+  const rise = (price - bottom) / unit;
+  const one = (v) => Math.round(v * 10) / 10;
+  if (fall >= CLIMAX_UNITS && fall > rise * 2 && price - lowest <= unit * CLIMAX_EDGE) {
+    return { dir: 'down', units: one(fall), text: `el precio ya cayó ${one(fall)} velas en las últimas ${window.length} y está en el mínimo de lo que se ve` };
+  }
+  if (rise >= CLIMAX_UNITS && rise > fall * 2 && highest - price <= unit * CLIMAX_EDGE) {
+    return { dir: 'up', units: one(rise), text: `el precio ya subió ${one(rise)} velas en las últimas ${window.length} y está en el máximo de lo que se ve` };
+  }
+  return null;
+}
+
+module.exports = { signalFor, trendSignal, candlePattern, climax, slope, ema, rsi, MIN_CANDLES };

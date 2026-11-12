@@ -50,13 +50,40 @@ test('una lectura rara no se da por buena; al volver a coincidir, sí', () => {
   assert.equal(v.check(candles), true);
 });
 
-test('al cerrar una vela hay un instante sin verificar y luego vuelve', () => {
+test('al cerrar una vela el seguimiento NO se suelta', () => {
   const v = createStabilityCheck();
   for (let i = 0; i < 3; i++) v.check(candles);
   const next = chain([...MOVES, 2]).slice(1); // cerró una vela: todas se corren un lugar
-  assert.equal(v.check(next), false);
-  assert.equal(v.check(next), false);
   assert.equal(v.check(next), true);
+  assert.equal(v.check(next), true);
+  assert.equal(v.check(next), true);
+  // Cerró una vela y además NO salió ninguna por la izquierda (hay una vela más a la vista)
+  const longer = chain([...MOVES, 2, -3]).slice(1);
+  assert.equal(v.check(longer), true);
+});
+
+test('una vela que sale por el borde izquierdo (o se ve cortada) no suelta el seguimiento', () => {
+  const v = createStabilityCheck();
+  for (let i = 0; i < 3; i++) v.check(candles);
+  // La del borde izquierdo se ve cortada: la mitad de alta
+  const cut = candles.map((c, i) => (i === 0 ? { ...c, high: c.low + (c.high - c.low) / 2 } : c));
+  assert.equal(v.check(cut), true);
+  // Y luego desaparece
+  assert.equal(v.check(candles.slice(1)), true);
+  assert.equal(v.check(candles.slice(1)), true);
+});
+
+test('con el seguimiento nuevo, una vela reciente tapada o deformada sigue sin darse por buena', () => {
+  const v = createStabilityCheck();
+  for (let i = 0; i < 3; i++) v.check(candles);
+  // Falta la penúltima vela cerrada (un globo la tapó)
+  const hole = candles.filter((_, i) => i !== candles.length - 3);
+  assert.equal(v.check(hole), false);
+  // Faltan dos velas de golpe
+  assert.equal(sameRead(candles, candles.slice(2)), false);
+  // La última cerrada salió deformada
+  const bent = candles.map((c, i) => (i === candles.length - 2 ? { ...c, high: c.high + (c.high - c.low) } : c));
+  assert.equal(sameRead(candles, bent), false);
 });
 
 test('las lecturas dan la fila del soporte y la resistencia, para dibujarlos', () => {

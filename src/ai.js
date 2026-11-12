@@ -17,6 +17,7 @@ const KEYS_PAGE = 'https://platform.openai.com/api-keys';
 // El usuario puede elegir cualquier otro modelo de su cuenta en los ajustes.
 const PREFERRED_MODELS = ['gpt-6-sol', 'gpt-5.5', 'gpt-4.1-mini', 'gpt-4o-mini'];
 const CANDLES_SENT = 12; // pocas velas: el foco es la vela en curso y lo ultimo que hizo el precio
+const LONG_CANDLES_SENT = 20; // operaciones de 30 s o mas
 
 /** Error con un mensaje apto para mostrar en el panel (nunca incluye la clave). */
 function apiError(status, bodyText) {
@@ -85,8 +86,9 @@ function pickModel(available, preferred = null) {
  * Resume la grafica en numeros pequenos: cada vela como [apertura, maximo, minimo, cierre],
  * en una escala donde una vela tipica mide ~100 y la primera abre en 0.
  */
-function describeChart(candles, moves, seconds, { asset = '', ticks = [], readings = null, now = null, price = null, regime = null, memory = null } = {}) {
-  const recent = candles.slice(-CANDLES_SENT);
+function describeChart(candles, moves, seconds, { asset = '', ticks = [], readings = null, now = null, price = null, regime = null, memory = null, clock = null, formation = null } = {}) {
+  // Con operaciones de 30 s o mas se mandan 20 velas: a ese plazo importa un poco mas de historia.
+  const recent = candles.slice(-(seconds >= 30 ? LONG_CANDLES_SENT : CANDLES_SENT));
   const ranges = recent.map((c) => c.high - c.low).sort((a, b) => a - b);
   const typical = ranges[Math.floor((ranges.length - 1) / 2)] || 1;
   const base = recent[0].open;
@@ -132,6 +134,27 @@ function describeChart(candles, moves, seconds, { asset = '', ticks = [], readin
       ...readings,
     };
   }
+  // Figura de varias velas que el panel reconocio en las velas cerradas.
+  if (formation) {
+    snapshot.figura_detectada = {
+      nombre: formation.name,
+      tipo: formation.kind === 'reverse' ? 'de giro' : 'de continuacion',
+      apunta: formation.vote > 0 ? 'hacia arriba' : 'hacia abajo',
+      explicacion: 'figura clasica reconocida por reglas en las ultimas velas cerradas; valorala tu con los datos, no la des por cierta',
+    };
+  }
+  // Reloj de la vela en curso: cuanto lleva de lo que dura.
+  if (clock && clock.seconds) {
+    const left = Math.max(0, Math.round((clock.seconds - clock.elapsed) * 10) / 10);
+    snapshot.reloj_de_la_vela = {
+      lleva_segundos: Math.min(clock.elapsed, clock.seconds),
+      dura_segundos: clock.seconds,
+      le_faltan_segundos: left,
+      explicacion:
+        'la vela en curso cierra cuando se cumple su duracion y empieza otra. Si tu respuesta tarda mas de lo que le falta, ' +
+        'la operacion caera en la vela SIGUIENTE: esta vela ya estara cerrada con la forma que tenga entonces',
+    };
+  }
   // Memoria del mercado: lo que paso otras veces en esta grafica tras una situacion como la actual.
   if (memory && memory.velas_guardadas) snapshot.memoria_del_mercado = memory;
   const name = String(asset || '').trim().slice(0, 60);
@@ -162,6 +185,14 @@ const PROMPT_INTRO =
   'claro", no lo uses. Si viene "memoria_del_mercado" (cómo se comportó esta gráfica antes: tras una racha ' +
   'de velas como la actual, cuántas veces la siguiente siguió igual o giró), aplícala: es historia real de ' +
   'este activo. Pesa más cuantos más casos tenga; con menos de 12 casos no saques conclusiones de ella. ' +
+  'Si viene "figura_detectada" (doble techo o doble piso, estrella de la tarde o de la mañana, tres soldados o ' +
+  'tres cuervos), compruébala en las velas y tenla en cuenta como un indicio más, sabiendo que en velas de ' +
+  'segundos estas figuras son menos fiables. ' +
+  'Si viene "reloj_de_la_vela", ubica la operación en el tiempo: compara lo que le falta a la vela con lo que ' +
+  'tardas en responder; si la vela cierra antes, razona sobre el arranque de la vela siguiente (tras una vela ' +
+  'que cerrará más o menos como va ahora), no sobre lo que le queda a esta. Dentro de "memoria_del_mercado", ' +
+  '"por_momento_de_la_vela" dice qué hizo el precio otras veces en este mismo tramo de la vela: es la ' +
+  'estadística que mejor encaja con una operación corta. ' +
   'Si viene "tu_respuesta_tarda", tenlo en cuenta: los datos son de ahora, pero la operación se abrirá esos ' +
   'segundos después; lo que importa es hacia dónde irá el precio a partir de entonces. ' +
   'Si viene "tus_ultimas_predicciones" (lo que predijiste antes en esta misma gráfica ' +

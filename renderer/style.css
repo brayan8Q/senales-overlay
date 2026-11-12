@@ -218,6 +218,7 @@ html, body {
 .counter-top { display: flex; justify-content: center; gap: 22px; font-size: 26px; font-weight: 900; line-height: 1.1; }
 .win { color: #4ade80; }
 .loss { color: #f87171; }
+.tie { color: #facc15; }
 .counter-bar { height: 4px; border-radius: 3px; background: #7f1d1d; margin: 4px 14px 5px; overflow: hidden; }
 .counter-bar.empty { background: #2b3140; }
 #tr-bar { height: 100%; width: 0; background: #22c55e; transition: width .3s; }

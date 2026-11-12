@@ -62,7 +62,7 @@ function createHistory() {
      * @param {number} now      Reloj en milisegundos.
      * @returns {{ candles: Array, prices: Array, restarted: boolean }}
      */
-    update(all, priceY, now) {
+    update(all, priceY, now, memoryMs = PRICE_MEMORY_MS) {
       const completed = all.slice(0, -1);
       let restarted = false;
       let rescaled = false; // la grafica cambio de escala o se desplazo en vertical
@@ -114,7 +114,7 @@ function createHistory() {
         }
       }
 
-      prices = prices.filter((p) => now - p.time <= PRICE_MEMORY_MS);
+      prices = prices.filter((p) => now - p.time <= memoryMs);
       if (priceY !== null && candles.length && lost === 0) {
         const lastPrice = prices[prices.length - 1];
         if (!lastPrice || now - lastPrice.time >= PRICE_STEP_MS) prices.push({ time: now, value: -priceY });

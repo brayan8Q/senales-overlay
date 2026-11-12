@@ -26,42 +26,51 @@ const median = (values) => {
  * @returns {Array<{x0:number,x1:number,dir:'up'|'down'|'flat',open:number,close:number,high:number,low:number}>}
  *   Velas de izquierda a derecha. La ultima suele ser la que esta en curso.
  */
-function readCandles(rgba, width, height) {
-  // Por columna y color: cuantos pixeles hay, el mas alto y el mas bajo.
-  // Ademas se guarda el TRAMO SEGUIDO mas largo de cada columna (segTop..segBot). Un hueco de
-  // hasta 3 px no corta el tramo (la linea del precio o la cuadricula pasan por encima de las
-  // velas), pero uno mayor si: asi la rayita que la plataforma dibuja en el precio de una
-  // operacion abierta, separada de la vela, no se toma como parte de ella.
-  const newSlot = () => ({ n: 0, top: -1, bot: -1, segTop: -1, segBot: -1, curTop: -1, curBot: -1 });
+const GREEN = 1;
+const RED = 2;
+const LINE_THICKNESS = 3; // grosor maximo (px) de la linea de una operacion abierta
+
+/** Por columna y color: cuantos pixeles hay, el mas alto, el mas bajo y el tramo seguido mas largo. */
+function scanColumns(mask, width, height) {
+  // Se guarda el TRAMO SEGUIDO mas largo de cada columna (segTop..segBot). Un hueco de hasta
+  // 3 px no corta el tramo (la linea del precio o la cuadricula pasan por encima de las velas),
+  // pero uno mayor si: asi la rayita que la plataforma dibuja en el precio de una operacion
+  // abierta, separada de la vela, no se toma como parte de ella.
+  const newSlot = () => ({ n: 0, top: -1, bot: -1, segTop: -1, segBot: -1, segN: 0, curTop: -1, curBot: -1, curN: 0 });
   const cols = new Array(width);
   for (let x = 0; x < width; x++) {
     const col = { g: newSlot(), r: newSlot() };
     for (let y = 0; y < height; y++) {
-      const p = (y * width + x) * 4;
-      const r = rgba[p];
-      const g = rgba[p + 1];
-      const b = rgba[p + 2];
-      const slot = isGreen(r, g, b) ? col.g : isRed(r, g, b) ? col.r : null;
-      if (!slot) continue;
+      const c = mask[y * width + x];
+      if (!c) continue;
+      const slot = c === GREEN ? col.g : col.r;
       if (slot.n === 0) slot.top = y;
       slot.bot = y;
       slot.n++;
-      if (slot.curTop === -1 || y - slot.curBot > MAX_GAP + 1) slot.curTop = y; // empieza otro tramo
+      if (slot.curTop === -1 || y - slot.curBot > MAX_GAP + 1) {
+        slot.curTop = y; // empieza otro tramo
+        slot.curN = 0;
+      }
       slot.curBot = y;
+      slot.curN++;
       if (slot.segTop === -1 || slot.curBot - slot.curTop > slot.segBot - slot.segTop) {
         slot.segTop = slot.curTop;
         slot.segBot = slot.curBot;
+        slot.segN = slot.curN;
       }
     }
     cols[x] = col;
   }
+  return cols;
+}
+
+/** Columnas seguidas del mismo color = una vela. */
+function findRuns(cols, width) {
   const colorAt = (x) => {
     const { g, r } = cols[x];
     if (g.n === 0 && r.n === 0) return null;
     return g.n >= r.n ? 'g' : 'r';
   };
-
-  // Columnas seguidas del mismo color = una vela.
   const runs = [];
   let x = 0;
   while (x < width) {
@@ -74,6 +83,101 @@ function readCandles(rgba, width, height) {
     while (x < width && colorAt(x) === color) x++;
     runs.push({ x0: start, x1: x - 1, color });
   }
+  return runs;
+}
+
+/**
+ * Una mancha mas ancha que una vela suele ser dos velas unidas por algo ajeno: los avisos de la
+ * plataforma ("Trade order placed") traen iconos verdes que caen en las columnas del hueco entre
+ * dos velas, mas abajo. Se separa donde las columnas vecinas dejan de estar a la misma altura.
+ * (Solo se aplica a las manchas anchas: una vela normal no se toca.)
+ */
+function splitWideRuns(runs, cols, usualWidth) {
+  const out = [];
+  for (const run of runs) {
+    if (run.x1 - run.x0 + 1 <= usualWidth * 1.4) {
+      out.push(run);
+      continue;
+    }
+    const slot = (x) => (run.color === 'g' ? cols[x].g : cols[x].r);
+    const touching = (a, b) => a.segTop <= b.segBot + 1 && b.segTop <= a.segBot + 1;
+    let start = run.x0;
+    for (let x = run.x0 + 1; x <= run.x1 + 1; x++) {
+      if (x <= run.x1 && touching(slot(x - 1), slot(x))) continue;
+      out.push({ x0: start, x1: x - 1, color: run.color });
+      start = x;
+    }
+  }
+  return out;
+}
+
+/**
+ * Borra la LINEA DE UNA OPERACION ABIERTA: la raya fina, verde (compra) o roja (venta), que la
+ * plataforma dibuja desde el punto de entrada hacia la derecha mientras dura la operacion.
+ * Si no se quita, se pega a la vela en curso (y a la anterior, cuando cierra una vela) y el
+ * lector ve una sola mancha anchisima en lugar de velas: se quedaba sin las dos ultimas velas
+ * durante todo el minuto de la operacion.
+ *
+ * Una vela nunca toca a la de al lado, asi que una fila con color seguido a lo largo de mas de
+ * una vela y media solo puede ser esa linea. De ella se borran los pixeles finos (los que no
+ * forman parte de un cuerpo): donde la linea pasa por dentro de una vela, la vela queda intacta.
+ *
+ * @returns {boolean} true si borro algo.
+ */
+function eraseOrderLines(mask, width, height, minLength) {
+  const thin = (x, y, c) => {
+    let extent = 1;
+    for (let k = 1; k <= LINE_THICKNESS && y - k >= 0 && mask[(y - k) * width + x] === c; k++) extent++;
+    for (let k = 1; k <= LINE_THICKNESS && y + k < height && mask[(y + k) * width + x] === c; k++) extent++;
+    return extent <= LINE_THICKNESS;
+  };
+  let erased = false;
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    let x = 0;
+    while (x < width) {
+      const c = mask[row + x];
+      if (!c) {
+        x++;
+        continue;
+      }
+      const start = x;
+      while (x < width && mask[row + x] === c) x++;
+      if (x - start < minLength) continue;
+      const thinOnes = [];
+      for (let cx = start; cx < x; cx++) if (thin(cx, y, c)) thinOnes.push(cx);
+      if (thinOnes.length < 8) continue; // algo ancho y macizo (un boton, una etiqueta): no es la linea
+      for (const cx of thinOnes) mask[row + cx] = 0;
+      erased = true;
+    }
+  }
+  return erased;
+}
+
+function readCandles(rgba, width, height) {
+  // Que pixeles son de vela: verde o rojo.
+  const mask = new Uint8Array(width * height);
+  for (let i = 0, p = 0; i < mask.length; i++, p += 4) {
+    const r = rgba[p];
+    const g = rgba[p + 1];
+    const b = rgba[p + 2];
+    if (isGreen(r, g, b)) mask[i] = GREEN;
+    else if (isRed(r, g, b)) mask[i] = RED;
+  }
+  let cols = scanColumns(mask, width, height);
+  let runs = findRuns(cols, width);
+
+  // Linea de una operacion abierta: se quita y se vuelve a leer.
+  {
+    const widths = runs.map((run) => run.x1 - run.x0 + 1).filter((w) => w >= 3);
+    if (widths.length) {
+      const usual = median(widths);
+      if (eraseOrderLines(mask, width, height, Math.max(12, Math.round(usual * 1.5)))) {
+        cols = scanColumns(mask, width, height);
+        runs = findRuns(cols, width);
+      }
+    }
+  }
 
   // Una raya fina pegada a una vela (p. ej. la linea que la plataforma dibuja desde una
   // operacion abierta) no es parte de la vela: se recorta por los lados.
@@ -85,6 +189,12 @@ function readCandles(rgba, width, height) {
     if (counts[Math.floor(counts.length * 0.75)] <= 6) continue; // todo es fino: no hay cuerpo que separar
     while (run.x1 > run.x0 && count(run.x1) <= 3) run.x1--;
     while (run.x0 < run.x1 && count(run.x0) <= 3) run.x0++;
+  }
+
+  // Dos velas unidas por un icono de un aviso: se separan.
+  {
+    const widths = runs.map((run) => run.x1 - run.x0 + 1).filter((w) => w >= 3);
+    if (widths.length) runs = splitWideRuns(runs, cols, median(widths));
   }
 
   // Se descartan velas cortadas por el borde y manchas que no tienen ancho de vela.
@@ -106,7 +216,7 @@ function readCandles(rgba, width, height) {
       if (slot.n === 0) continue;
       tops.push(slot.segTop);
       bots.push(slot.segBot);
-      fills.push(slot.n / (slot.bot - slot.top + 1));
+      fills.push(slot.segN / (slot.segBot - slot.segTop + 1)); // dentro de la vela, no de toda la columna
     }
     // La mayoria de las columnas son solo cuerpo; la mecha ocupa 1-2 columnas.
     const bodyTop = median(tops);

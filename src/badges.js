@@ -3,7 +3,8 @@
  *
  * Al cerrar una operacion la plataforma dibuja un globo: etiqueta negra con el
  * importe en blanco ("$0", "+$1.75") y, a su derecha, un circulo con palomita:
- * VERDE si la operacion se gano, ROJO si se perdio.
+ * VERDE si la operacion se gano, ROJO si se perdio y AMARILLO si quedo en empate
+ * (la plataforma devuelve lo apostado: "+$2").
  *
  * Aqui se localizan esos globos en la imagen y se cuentan una sola vez cada
  * uno. Es el resultado real de las operaciones del usuario, no una estimacion.
@@ -13,12 +14,13 @@
 
 const isGreen = (r, g, b) => g > 100 && g - r > 40 && g - b > 40;
 const isRed = (r, g, b) => r > 140 && r - g > 70 && r - b > 70;
+const isYellow = (r, g, b) => r > 190 && g > 130 && b < 110 && r - b > 100; // amarillo del empate (240, 208, 16)
 const isBlack = (r, g, b) => r < 30 && g < 30 && b < 30; // el fondo de la grafica es azul oscuro, no negro
 const isWhite = (r, g, b) => r > 190 && g > 190 && b > 190;
 
 /**
  * Busca globos de resultado en la imagen.
- * @returns {Array<{x:number, y:number, result:'win'|'loss'}>}  (x, y = centro de la etiqueta)
+ * @returns {Array<{x:number, y:number, result:'win'|'loss'|'tie'}>}  (x, y = centro de la etiqueta)
  */
 function findResultBadges(rgba, width, height) {
   const at = (x, y) => {
@@ -74,9 +76,10 @@ function findResultBadges(rgba, width, height) {
     const textShare = white / (w * h);
     if (textShare < 0.015 || textShare > 0.35) continue;
 
-    // Y un circulo de color pegado a la derecha: verde = ganada, rojo = perdida.
+    // Y un circulo de color pegado a la derecha: verde = ganada, rojo = perdida, amarillo = empate.
     let green = 0;
     let red = 0;
+    let yellow = 0;
     let total = 0;
     for (let y = y0; y <= y1; y++) {
       for (let x = x1 + 1; x <= Math.min(width - 1, x1 + h); x++) {
@@ -84,12 +87,14 @@ function findResultBadges(rgba, width, height) {
         const [r, g, b] = at(x, y);
         if (isGreen(r, g, b)) green++;
         else if (isRed(r, g, b)) red++;
+        else if (isYellow(r, g, b)) yellow++;
       }
     }
     if (total === 0) continue;
     let result = null;
-    if (green / total >= 0.3 && green >= red * 3) result = 'win';
-    else if (red / total >= 0.3 && red >= green * 3) result = 'loss';
+    if (green / total >= 0.3 && green >= (red + yellow) * 3) result = 'win';
+    else if (red / total >= 0.3 && red >= (green + yellow) * 3) result = 'loss';
+    else if (yellow / total >= 0.3 && yellow >= (green + red) * 3) result = 'tie';
     if (!result) continue;
 
     badges.push({ x: Math.round((x0 + x1) / 2), y: Math.round((y0 + y1) / 2), result });
@@ -137,6 +142,9 @@ function createBadgeCounter() {
         if (entry.result === 'win') {
           tally.wins++;
           last = 'GANADA';
+        } else if (entry.result === 'tie') {
+          tally.ties++;
+          last = 'EMPATE';
         } else {
           tally.losses++;
           last = 'PERDIDA';
@@ -157,7 +165,7 @@ function createBadgeCounter() {
         // ya estaban conservan su estado y los que sobran por la derecha son nuevos.
         const recent = known.filter((k) => now - k.lastSeen <= RECENT_MS);
         const next = [];
-        for (const result of ['win', 'loss']) {
+        for (const result of ['win', 'loss', 'tie']) {
           const before = recent.filter((k) => k.result === result).sort((a, b) => a.x - b.x);
           const current = badges.filter((b) => b.result === result).sort((a, b) => a.x - b.x);
           // Si ahora hay menos, los que faltan son los de la izquierda (salieron de la vista).
@@ -200,6 +208,7 @@ function createBadgeCounter() {
     reset() {
       tally.wins = 0;
       tally.losses = 0;
+      tally.ties = 0;
       known = [];
       needsRebase = true;
       last = '';

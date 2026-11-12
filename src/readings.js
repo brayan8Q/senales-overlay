@@ -73,13 +73,17 @@ function cluster(values, gap) {
 }
 
 /** Soportes (minimos locales) y resistencias (maximos locales) de las velas cerradas. */
-function findLevels(candles, unit) {
+function findLevels(candles, unit, forming = null) {
   const lows = [];
   const highs = [];
-  for (let i = 2; i < candles.length - 2; i++) {
-    const around = [candles[i - 2], candles[i - 1], candles[i + 1], candles[i + 2]];
-    if (around.every((c) => candles[i].low <= c.low)) lows.push(candles[i].low);
-    if (around.every((c) => candles[i].high >= c.high)) highs.push(candles[i].high);
+  // La vela en curso cuenta como vecina: asi el pico (o el piso) mas reciente tambien sale como
+  // nivel en cuanto hay una vela cerrada despues de el y la vela en curso tampoco lo supera.
+  // Es justo el nivel que mas importa: el ultimo sitio donde el precio se dio la vuelta.
+  const list = forming ? [...candles, forming] : candles;
+  for (let i = 2; i < list.length - 2; i++) {
+    const around = [list[i - 2], list[i - 1], list[i + 1], list[i + 2]];
+    if (around.every((c) => list[i].low <= c.low)) lows.push(list[i].low);
+    if (around.every((c) => list[i].high >= c.high)) highs.push(list[i].high);
   }
   return { supports: cluster(lows, unit * 0.35), resistances: cluster(highs, unit * 0.35) };
 }
@@ -106,7 +110,7 @@ function sessionAt(now, asset = '') {
  * @param {string} [input.asset]
  * @returns {{ items: Array, vote: number, text: string, data: object } | null}
  */
-function computeReadings({ candles, forming, prices = [], now = null, time, asset = '', pips = null }) {
+function computeReadings({ candles, forming, prices = [], now = null, time, asset = '', pips = null, trendCandles = TREND_CANDLES }) {
   if (!forming || candles.length < 4) return null;
   const all = [...candles, forming];
   const closes = all.map((c) => c.close);
@@ -122,7 +126,7 @@ function computeReadings({ candles, forming, prices = [], now = null, time, asse
   const count = all.length;
 
   // 1) Tendencia
-  const trendCount = Math.min(TREND_CANDLES, count);
+  const trendCount = Math.min(trendCandles, count);
   const trendCloses = closes.slice(-trendCount);
   const drift = slope(trendCloses) * (trendCount - 1);
   const trendVote = Math.abs(drift) < unit ? 0 : Math.sign(drift);
@@ -222,7 +226,7 @@ function computeReadings({ candles, forming, prices = [], now = null, time, asse
   }
 
   // 6) Nivel abajo (soporte) y arriba (resistencia)
-  const { supports, resistances } = findLevels(candles.slice(-LEVEL_CANDLES), unit);
+  const { supports, resistances } = findLevels(candles.slice(-LEVEL_CANDLES), unit, forming);
   const below = supports.filter((l) => l.value < price - unit * 0.05).pop() || null;
   const above = resistances.find((l) => l.value > price + unit * 0.05) || null;
   const toSupport = below ? (price - below.value) / unit : Infinity;

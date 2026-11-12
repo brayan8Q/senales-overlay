@@ -24,7 +24,7 @@ const { computeReadings } = require('./src/readings');
 const { createQualityGate, createStabilityCheck } = require('./src/quality');
 const { readAxis } = require('./src/axis');
 const { measureRegime } = require('./src/regime');
-const { createMarketMemory } = require('./src/memory');
+const { createMarketMemory, segmentsOf, segmentCount } = require('./src/memory');
 const { costOf } = require('./src/prices');
 const { summarize } = require('./src/score');
 const { findResultBadges, viewJumped, createBadgeCounter } = require('./src/badges');
@@ -43,7 +43,13 @@ const AI_MANUAL_EXTRA_MS = 5000; // modo manual: cuanto mas se espera a la IA pa
 // del resultado (ese globo sale al cerrar la operacion, es decir, entrada + duracion).
 const ENTRY_MAX_MS = 4000;
 const BADGE_LAG_MS = 500; // lo que tarda el panel en confirmar un globo (dos lecturas seguidas)
-const TRACK_MEMORY_MS = 10 * 60 * 1000; // cotizaciones reales que se recuerdan (para Mov. 1 min y el patron)
+// Cuanto precio se recuerda (para "Mov. 1 min" y el patron medido). El patron necesita al menos
+// 24 tramos del tamano de la operacion, asi que con operaciones largas hay que recordar mas:
+// 10 minutos como minimo, o 40 tramos (40 minutos si la operacion dura 1 minuto).
+const trackMemoryMs = () => Math.max(10 * 60 * 1000, 40 * config.cycleSeconds * 1000);
+const TRACK_STEP_MS = 250; // como mucho una cotizacion guardada cada 250 ms
+// Con operaciones de 30 s o mas se mira un poco mas de historia: 20 velas en vez de 12.
+const longTrade = () => config.cycleSeconds >= 30;
 const GOOD_CANDLES_MS = 30000; // cuanto valen las ultimas velas bien leidas mientras algo tapa la grafica
 
 let win = null;
@@ -132,13 +138,31 @@ function saveAutoShot(image, badges) {
     const dir = path.join(app.getPath('userData'), 'capturas-auto');
     fs.mkdirSync(dir, { recursive: true });
     const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '') + '_' + String(Date.now() % 1000).padStart(3, '0');
-    const found = badges.map((b) => (b.result === 'win' ? 'G' : 'P')).join('') || 'sin-globo';
+    const found = badges.map((b) => (b.result === 'win' ? 'G' : b.result === 'tie' ? 'E' : 'P')).join('') || 'sin-globo';
     fs.writeFileSync(path.join(dir, `${stamp}_${found}.png`), image.toPNG());
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.png')).sort();
     for (const old of files.slice(0, Math.max(0, files.length - 30))) fs.unlinkSync(path.join(dir, old));
   } catch {
     /* el diagnostico no es critico */
   }
+}
+
+// Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
+const BUILD = '2026-11-12 lectura con operacion abierta + freno de movimiento agotado + NO ENTRAR en confianza baja';
+
+/**
+ * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
+ * ahora + lo que tardan las IA en contestar + lo que tarda el usuario en entrar.
+ */
+function candleClock(now, forming) {
+  if (!candleStartedAt) return null;
+  const waits = enabledAis().map((id) => ais[id].lastMs || 4000);
+  const aiMs = anyAi() && !instantMode() ? Math.max(...waits) : 0;
+  return {
+    elapsed: (now - candleStartedAt + aiMs + entryMs()) / 1000,
+    tradeSeconds: config.cycleSeconds,
+    formingDir: forming ? forming.dir : 'flat',
+  };
 }
 
 // Memoria del mercado: cada vela que cierra se guarda en disco, por activo (ver src/memory.js).
@@ -163,6 +187,14 @@ const quality = createQualityGate();
 // Lectura verificada: tres lecturas seguidas de las velas deben coincidir.
 const stability = createStabilityCheck();
 let scanInfo = null; // lo que el escaner dibuja sobre la grafica: velas leidas, niveles y si esta verificada
+let readTimes = []; // instantes de las ultimas lecturas de pantalla (para medir lecturas por segundo)
+/** Lecturas de pantalla por segundo, medidas sobre las ultimas. */
+function readsPerSecond(now) {
+  readTimes = [...readTimes, now].slice(-12);
+  if (readTimes.length < 3) return null;
+  const seconds = (readTimes[readTimes.length - 1] - readTimes[0]) / 1000;
+  return seconds > 0 ? Math.round((10 * (readTimes.length - 1)) / seconds) / 10 : null;
+}
 let coverReason = null;
 // Resultados reales de las operaciones del usuario: los globos verde/rojo de la plataforma.
 const badgeCounter = createBadgeCounter();
@@ -306,6 +338,12 @@ function askCouncil(candles, moves, ticks, windowMs, readings = null) {
     price: priceText,
     regime,
     memory: memoryInfo ? memoryInfo.data : null,
+    formation: last.formation || null,
+    // Reloj de la vela: cuanto lleva y cuanto dura (para que sepan si la operacion caera en la vela siguiente).
+    clock:
+      candleStartedAt && memoryInfo && memoryInfo.candleSeconds
+        ? { elapsed: Math.round((Date.now() - candleStartedAt) / 100) / 10, seconds: memoryInfo.candleSeconds }
+        : null,
   });
   // A cada IA se le agregan SUS predicciones anteriores en esta grafica y lo que paso despues:
   // no recuerdan nada entre consultas, asi que es la unica forma de que puedan corregirse.
@@ -485,12 +523,12 @@ async function scanTick() {
 
     // Globos de resultado de la plataforma (verde = ganada, rojo = perdida).
     const badges = findResultBadges(pixels.data, pixels.width, pixels.height);
-    const tradesBefore = trades.wins + trades.losses;
+    const tradesBefore = trades.wins + trades.losses + (trades.ties || 0);
     trades = badgeCounter.update(badges, Date.now(), viewJumped(previousCandles, candles));
     previousCandles = candles;
     // Registro: cada operacion que la plataforma marca como ganada o perdida.
-    if (trades.wins + trades.losses !== tradesBefore) {
-      record(`B,${Date.now()},${trades.last},${trades.wins},${trades.losses}`);
+    if (trades.wins + trades.losses + (trades.ties || 0) !== tradesBefore) {
+      record(`B,${Date.now()},${trades.last},${trades.wins},${trades.losses},${trades.ties || 0}`);
       // El globo sale al cerrar la operacion: senal + lo que tardo en entrar + duracion.
       const sample = Date.now() - lastSignalAt - config.cycleSeconds * 1000 - BADGE_LAG_MS;
       if (lastSignalAt && sample > -700 && sample < ENTRY_MAX_MS + 2000) {
@@ -532,8 +570,9 @@ async function scanTick() {
       priceText = price === null ? null : price.toFixed(axis.decimals);
       if (priceText) {
         record(`T,${now},${priceText},${axis.pip}`); // registro del precio real
-        track.push({ time: now, value: price });
-        while (track.length && now - track[0].time > TRACK_MEMORY_MS) track.shift();
+        const lastQuote = track[track.length - 1];
+        if (!lastQuote || now - lastQuote.time >= TRACK_STEP_MS) track.push({ time: now, value: price });
+        while (track.length && now - track[0].time > trackMemoryMs()) track.shift();
       }
 
       // Se puede medir el precio si hay cotizacion real, o si las velas se leen bien (para medirlo
@@ -547,22 +586,34 @@ async function scanTick() {
       const usable = formingOk || !goodCandles || now - goodCandles.time > GOOD_CANDLES_MS ? candles : goodCandles.candles;
 
       if (formingOk) {
-        const hist = history.update(candles, priceY, now);
+        const hist = history.update(candles, priceY, now, trackMemoryMs());
         // Memoria del mercado: se guarda cada vela que acaba de cerrar y se consulta que paso
         // las otras veces que la grafica estuvo en una situacion como la de ahora.
         if (marketMemory) {
           if (hist.added.length) {
-            candleStartedAt = now; // acaba de cerrar una vela: empieza la siguiente
             const ranges = hist.candles.slice(-20).map((c) => c.high - c.low).sort((a, b) => a - b);
             const unit = ranges[Math.floor((ranges.length - 1) / 2)] || 1;
-            const step = (marketMemory.stats(hist.candles).candleSeconds || 15) * 1000;
-            hist.added.forEach((candle, i) => marketMemory.add(candle, now - (hist.added.length - 1 - i) * step, unit));
+            const seconds = marketMemory.stats(hist.candles).candleSeconds;
+            const step = (seconds || 15) * 1000;
+            // Tramos de la vela que acaba de cerrar: hacia donde fue el precio en cada uno. Solo si se
+            // vio la vela entera (se sabe cuando empezo) y cerro una sola.
+            let segments = '';
+            if (seconds && hist.added.length === 1 && candleStartedAt && Math.abs(now - candleStartedAt - step) < step * 0.35) {
+              const path = quote ? track.slice(-400).map((p) => ({ time: p.time, value: p.value / quote.perPixel })) : hist.prices;
+              segments = segmentsOf(path, candleStartedAt, now, segmentCount(seconds, config.cycleSeconds));
+            }
+            hist.added.forEach((candle, i) =>
+              marketMemory.add(candle, now - (hist.added.length - 1 - i) * step, unit, i === hist.added.length - 1 ? segments : ''),
+            );
+            candleStartedAt = now; // acaba de cerrar una vela: empieza la siguiente
           }
-          if (hist.added.length || !memoryInfo) memoryInfo = marketMemory.stats(hist.candles);
+          // Se consulta en cada lectura: lo que dice la memoria depende tambien del momento de la vela.
+          memoryInfo = marketMemory.stats(hist.candles, candleClock(now, forming));
         }
         // Recorrido del precio para "Mov. 1 min" y el patron: la cotizacion real si esta a la
         // vista (en pixeles de la escala actual); si no, el recorrido respecto a las velas.
-        const prices = quote ? track.map((p) => ({ time: p.time, value: p.value / quote.perPixel })) : hist.prices;
+        // (Para las lecturas basta el ultimo minuto y medio; el patron medido usa todo lo recordado.)
+        const prices = quote ? track.slice(-400).map((p) => ({ time: p.time, value: p.value / quote.perPixel })) : hist.prices;
         // Patron medido: si a este plazo el precio viene continuando o rebotando.
         if (now - regimeAt >= REGIME_EVERY_MS) {
           regimeAt = now;
@@ -576,6 +627,7 @@ async function scanTick() {
           time: now,
           asset: config.asset,
           pips: axis ? { perPixel: axis.perPixel, pip: axis.pip } : null,
+          trendCandles: longTrade() ? 20 : 12,
         });
         longCandles = forming && hist.candles.length ? [...hist.candles, forming] : candles;
       }
@@ -638,7 +690,11 @@ async function scanTick() {
         // De pixeles de la imagen a puntos de pantalla dentro de la zona: punto = margen + pixel / escala.
         const k = shot.scale;
         const o = CROP_INSET;
-        const current = usable[usable.length - 1] || null;
+        // La vela actual se sigue con la lectura de ESTE instante siempre que la linea del precio
+        // pase por su cierre (eso solo le pasa a la vela en curso de verdad). No espera a que las
+        // velas cerradas esten verificadas: si no, el marcador se quedaba atras en cada cierre.
+        const liveCurrent = priceY !== null && check.forming && candles.length >= 3;
+        const current = (liveCurrent ? candles[candles.length - 1] : usable[usable.length - 1]) || null;
         const inPips = (px) => (axis ? Math.round((10 * Math.abs(px) * axis.perPixel) / axis.pip) / 10 : null);
         const top = current ? Math.max(current.open, current.close) : 0;
         const bottom = current ? Math.min(current.open, current.close) : 0;
@@ -647,6 +703,7 @@ async function scanTick() {
         scanInfo = {
           mode: last.phase === 'signal' ? 'signal' : 'analysis',
           verified,
+          rate: readsPerSecond(now), // lecturas de pantalla por segundo en este momento
           candles: usable.map((c) => ({ x: o + c.x0 / k, w: (c.x1 - c.x0 + 1) / k, y: o - c.high / k, h: (c.high - c.low) / k, up: c.dir === 'up' })),
           support: panel && panel.rows.support !== null ? o + panel.rows.support / k : null,
           resistance: panel && panel.rows.resistance !== null ? o + panel.rows.resistance / k : null,
@@ -663,11 +720,12 @@ async function scanTick() {
                 open: o - current.open / k,
                 price: o + (priceY === null ? -current.close : priceY) / k,
                 up: current.dir === 'up',
-                covered: !formingOk, // algo la tapa: se muestra la ultima lectura buena
+                covered: !liveCurrent, // algo la tapa: se muestra la ultima lectura buena
                 bodyPips: inPips(top - bottom),
                 upperPips: inPips(current.high - top),
                 lowerPips: inPips(bottom - current.low),
                 pattern: last.readings ? last.readings.candle.text : '',
+                figure: last.formation ? last.formation.name : '', // figura de varias velas detectada
                 moving: last.readings ? last.readings.price.text : '',
                 lean: last.readings ? last.readings.price.lean : 'flat',
                 quote: priceText,
@@ -997,6 +1055,7 @@ if (!app.requestSingleInstanceLock()) {
     setInterval(scanTick, SCAN_INTERVAL_MS);
     setInterval(flushRecord, 5000);
     app.on('before-quit', flushRecord);
+    record(`V,${Date.now()},${BUILD}`); // desde aqui, lo que se registre es de esta version
     marketMemory = createMarketMemory(path.join(app.getPath('userData'), 'memoria'));
     marketMemory.setAsset(config.asset);
     setInterval(() => marketMemory.flush(), 5000);

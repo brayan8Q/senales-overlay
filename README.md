@@ -128,6 +128,27 @@ Necesita 60 tramos (5 minutos a 5 s) con la gráfica a la vista y solo declara
 un patrón si se aleja de 50 % más de lo que explicaría la suerte. Describe los
 últimos minutos: puede cambiar, y no garantiza el siguiente tramo.
 
+## Figuras de varias velas
+
+Además de los patrones de una sola vela, el panel reconoce seis figuras sobre
+las velas ya cerradas (`src/formations.js`):
+
+| Figura | Qué es | Voto |
+| --- | --- | --- |
+| Doble techo / doble piso | El precio llegó dos veces a la misma altura y no la pasó | 2, giro |
+| Estrella de la tarde / de la mañana | Vela grande, vela chiquita, vela grande en contra | 2, giro |
+| Tres soldados / tres cuervos | Tres velas del mismo color, cada una cerrando más allá | 1, continuación |
+
+La figura aparece en el rótulo de la vela actual ("· figura: estrella de la
+tarde"), en la razón de la señal ("Figura: …") y se le manda a las IA. Si el
+patrón medido dice que el precio viene continuando, las figuras de giro no
+cuentan; si viene rebotando, no cuentan las de continuación.
+
+Lo que mostró la simulación: en los mercados artificiales no cambian el acierto
+de la señal (±0.2 puntos). Esos mercados no forman figuras a propósito, así que
+no prueba que no sirvan, pero tampoco que sirvan: se inventaron para velas de
+horas o días, y en velas de segundos su efecto hay que medirlo con el marcador.
+
 ## Simulación
 
 ```
@@ -200,6 +221,23 @@ Cosas que conviene saber:
 - Más lecturas dan más contexto, no certeza: lo que dice si acierta es el
   contador.
 
+## Versiones guardadas (para volver atrás)
+
+El proyecto lleva control de versiones local (git). Puntos de restauración:
+
+- `version-buena-2026-11-12`: tres IA, escáner con lectura verificada y línea
+  de COMPRA / VENTA sugerida. Es la versión que se pidió conservar antes de
+  agregar el reloj de la vela y la memoria por momento.
+
+Para volver a ese punto (con el panel cerrado):
+
+```bash
+git checkout version-buena-2026-11-12 -- .
+```
+
+El registro marca con una línea `V,` el momento en que arranca cada versión,
+para comparar el acierto antes y después de un cambio.
+
 ## Tres IA a la vez (ChatGPT, Gemini y Claude)
 
 En ⚙ hay tres espacios para claves: **ChatGPT (OpenAI)**, **Gemini (Google)** y
@@ -257,6 +295,20 @@ verdes seguidas; las otras veces que pasó eso aquí, ¿cómo fue la siguiente?"
   vacío, todo se guarda junto como "sin-nombre" y se mezclan pares distintos.
 - Al principio está vacía: con velas de 15 s junta unas 240 por hora. Empieza a
   servir tras una o dos horas en el mismo par.
+
+**Memoria por momento de la vela** (desde el 2026-11-12). Cada vela se parte en
+tramos del tamaño de la operación (vela de 15 s y operaciones de 5 s = 3
+tramos) y se guarda hacia dónde fue el precio en cada tramo. Así la memoria
+puede decir: "tras 2 verdes seguidas, en el tramo 2 de 3 de la vela el precio
+bajó 11 de 16 veces". El tramo se elige según cuándo empezará de verdad la
+operación (ahora + lo que tardan las IA + tu retraso de entrada); si para
+entonces la vela ya habrá cerrado, se usa el primer tramo de la siguiente.
+Mismas reglas para votar (12 casos y diferencia clara); el voto de la memoria
+nunca pasa de 2. Las velas guardadas antes de este cambio no tienen tramos.
+
+**Reloj de la vela para las IA.** En cada consulta se les manda cuánto lleva la
+vela, cuánto dura y cuánto le falta, con la instrucción de que, si su respuesta
+tarda más que eso, razonen sobre el arranque de la vela siguiente.
 
 **Memoria de cada IA.** En cada consulta, cada IA recibe sus últimas 10
 predicciones en esa gráfica con lo que pasó ("dijiste que subiría, bajó") y su
