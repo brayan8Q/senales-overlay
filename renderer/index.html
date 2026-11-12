@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'" />
+<title>Lector de tendencia</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Marco de la zona que se escanea -->
+  <div id="zone" class="hidden">
+    <span>GRÁFICA</span>
+    <!-- Efecto de escáner: un haz recorre las velas de izquierda a derecha mientras se analiza.
+         Mientras se ve, la ventana se oculta a las capturas de pantalla para no estorbar la lectura. -->
+    <div id="scan" class="hidden">
+      <!-- Lo que el panel leyó: un recuadro por vela, la vela actual, el precio, soporte y resistencia -->
+      <div id="scan-marks"></div>
+      <div id="scan-resistance" class="scan-level hidden"><span>resistencia</span></div>
+      <div id="scan-support" class="scan-level hidden"><span>soporte</span></div>
+      <div id="scan-beam"></div>
+      <!-- Seguimiento de la vela actual: cuerpo, mechas, apertura, precio en vivo y reloj -->
+      <div id="scan-wick" class="hidden"></div>
+      <div id="scan-body" class="hidden"></div>
+      <div id="scan-high" class="scan-tick hidden"><b></b></div>
+      <div id="scan-low" class="scan-tick hidden"><b></b></div>
+      <div id="scan-open" class="hidden"><b>apertura</b></div>
+      <div id="scan-now" class="hidden"><b></b></div>
+      <div id="scan-info" class="hidden"></div>
+      <div id="scan-clock" class="hidden"><i></i></div>
+      <!-- Señal en curso: precio de entrada y cómo va en este instante -->
+      <div id="scan-target" class="hidden"></div>
+      <div id="scan-entry" class="hidden"><b></b></div>
+      <div id="scan-label">ESCANEANDO VELAS</div>
+    </div>
+  </div>
+
+  <!-- Capa para dibujar la zona con el raton -->
+  <div id="selector" class="hidden">
+    <div id="sel-hint">Arrastra un recuadro sobre las velas de la gráfica (Esc para cancelar)</div>
+    <div id="sel-rect" class="hidden"></div>
+  </div>
+
+  <!-- Panel flotante compacto -->
+  <div id="panel">
+    <div id="panel-header">
+      <span>Lector de tendencia</span>
+      <span>
+        <button id="btn-settings" title="Ajustes: zona, tiempos, pago y clave de la IA">⚙</button>
+        <button id="btn-quit" title="Cerrar">✕</button>
+      </span>
+    </div>
+
+    <!-- Señal -->
+    <div id="signal" class="wait">
+      <div id="signal-source"></div>
+      <div id="signal-label">ESPERAR</div>
+      <div id="signal-detail"></div>
+    </div>
+
+    <!-- Modo manual: la predicción se pide con este botón -->
+    <button id="btn-predict" class="hidden">PREDECIR</button>
+
+    <!-- Barra: avance del análisis o tiempo que le queda a la señal -->
+    <div id="progress" class="hidden">
+      <div id="progress-fill"></div>
+      <div id="progress-text"></div>
+    </div>
+
+    <!-- Lecturas -->
+    <div id="readings-head" title="Calculadas con las velas leídas de la pantalla. El historial se acumula mientras el panel está abierto.">
+      <span id="readings-title">Lecturas · de la pantalla</span><span id="readings-count"></span>
+    </div>
+    <div id="readings">
+      <div class="chip" id="chip-trend"><span class="chip-name">Tendencia</span><span class="chip-value">…</span><svg class="chip-spark" viewBox="0 0 60 12" preserveAspectRatio="none"><polyline points="" /></svg></div>
+      <div class="chip" id="chip-ema"><span class="chip-name">EMA 50/200</span><span class="chip-value">…</span><svg class="chip-spark" viewBox="0 0 60 12" preserveAspectRatio="none"><polyline points="" /></svg></div>
+      <div class="chip" id="chip-momentum"><span class="chip-name">Momentum</span><span class="chip-value">…</span><svg class="chip-spark" viewBox="0 0 60 12" preserveAspectRatio="none"><polyline points="" /></svg></div>
+      <div class="chip" id="chip-rsi"><span class="chip-name">RSI 14</span><span class="chip-value">…</span><svg class="chip-spark" viewBox="0 0 60 12" preserveAspectRatio="none"><polyline points="" /></svg></div>
+      <div class="chip" id="chip-move"><span class="chip-name">Mov. 1 min</span><span class="chip-value">…</span><svg class="chip-spark" viewBox="0 0 60 12" preserveAspectRatio="none"><polyline points="" /></svg></div>
+      <div class="chip" id="chip-level"><span class="chip-name">Nivel abajo</span><span class="chip-value">…</span><svg class="chip-spark" viewBox="0 0 60 12" preserveAspectRatio="none"><polyline points="" /></svg></div>
+      <div class="chip" id="chip-session"><span class="chip-name">Sesión</span><span class="chip-value">…</span><svg class="chip-spark" viewBox="0 0 60 12" preserveAspectRatio="none"><polyline points="" /></svg></div>
+      <div class="chip" id="chip-summary"><span class="chip-name">Resumen</span><span class="chip-value">…</span><svg class="chip-spark" viewBox="0 0 60 12" preserveAspectRatio="none"><polyline points="" /></svg></div>
+    </div>
+
+    <!-- Patrón medido en el precio real: si a este plazo viene continuando o rebotando -->
+    <div id="regime" class="hidden" title="El panel corta el precio de los últimos minutos en tramos del mismo plazo que tu señal y cuenta cuántas veces el tramo siguiente fue hacia el mismo lado (continúa) o hacia el contrario (rebota). Si hay un patrón claro, la señal se orienta según él. Necesita unos 5 minutos de gráfica a la vista y describe solo los últimos minutos: puede cambiar."></div>
+
+    <!-- Memoria del mercado: qué pasó otras veces tras una racha de velas como la de ahora -->
+    <div id="memory" class="hidden" title="El panel guarda en disco cada vela que cierra de este activo (se acumula entre sesiones). Aquí dice qué pasó las otras veces que la gráfica estuvo como ahora: por ejemplo, tras 3 velas verdes seguidas, cuántas veces la siguiente fue roja. Vota en la señal solo con 12 casos o más y una diferencia clara; se le manda a las IA. Escribe el nombre del activo en ⚙ para que cada par tenga su propia memoria."></div>
+
+    <div id="problem" class="hidden"></div>
+
+    <!-- Contador: lo que marcó la plataforma (globo verde = ganada, rojo = perdida) -->
+    <div id="counter" title="Cuenta el globo verde (ganada) o rojo (perdida) que la plataforma dibuja al cerrar cada operación tuya.">
+      <div class="counter-top">
+        <span id="tr-wins" class="win">0</span>
+        <span id="tr-losses" class="loss">0</span>
+      </div>
+      <div class="counter-bar"><div id="tr-bar"></div></div>
+      <div id="tr-rate"></div>
+      <div id="sc-line"></div>
+      <div id="ai-scores" class="hidden" title="Aciertos de cada IA por separado: cuántas veces el precio fue hacia donde ella dijo, aunque la señal mostrada haya sido otra. Sirve para ver cuál conviene dejar activa."></div>
+      <div id="ai-cost" class="hidden" title="Costo aproximado por predicción de cada IA: tokens reales que informa cada proveedor, multiplicados por un precio de referencia (puede no coincidir con tu factura). Entre paréntesis, cuánto tarda en contestar."></div>
+      <div id="sc-instant" class="hidden" title="La misma pulsación de PREDECIR, pero medida con la señal que las reglas darían en ese instante, sin esperar a la IA. Sirve para comparar: si acierta más que la señal mostrada, conviene activar 'Señal al instante' en ⚙."></div>
+      <button id="btn-reset" title="Pone los contadores en cero">Reiniciar</button>
+    </div>
+
+    <!-- Ajustes (ocultos hasta pulsar el engrane) -->
+    <div id="settings" class="hidden">
+      <div class="buttons">
+        <button id="btn-zone">Marcar gráfica</button>
+        <button id="btn-auto">Escáner: ON</button>
+      </div>
+      <div class="field">
+        <label for="cycle" title="Igual que el tiempo de expiración de tu operación. 0 = una señal por vela.">Cada señal vale (segundos)</label>
+        <input id="cycle" type="number" min="0" max="3600" step="1" value="15" />
+      </div>
+      <div class="field">
+        <label for="pause" title="Tiempo que el panel analiza después de cada señal, antes de dar la siguiente.">Análisis entre señales (segundos)</label>
+        <input id="pause" type="number" min="0" max="600" step="1" value="5" />
+      </div>
+      <div class="field">
+        <label for="payout" title="El porcentaje que la plataforma muestra como Payout para ese activo.">Pago de la plataforma (%)</label>
+        <input id="payout" type="number" min="1" max="300" step="1" value="85" />
+      </div>
+
+      <label class="check" title="Activado: da una señal tras otra. Desactivado: solo cuando pulsas PREDECIR.">
+        <input id="auto-mode" type="checkbox" />
+        <span>Predecir solo, sin botón (automático)</span>
+      </label>
+      <label class="check" title="Al pulsar PREDECIR la señal sale en ese instante, con las reglas del panel y el movimiento del precio de ese momento. No espera el análisis ni a la IA (que tarda 3 a 5 s). Pensado para expiraciones de 5 a 15 segundos.">
+        <input id="instant" type="checkbox" />
+        <span>Señal al instante al pulsar (sin esperar a la IA)</span>
+      </label>
+      <label class="check" title="Si lo desactivas, el panel dirá ESPERAR cuando no vea una lectura clara.">
+        <input id="always" type="checkbox" checked />
+        <span>Dar siempre ARRIBA o ABAJO (sin ESPERAR)</span>
+      </label>
+
+      <div class="settings-title">Inteligencia artificial (hasta 3 a la vez)</div>
+      <div class="field">
+        <label for="asset" title="Se le pasa a la IA solo como referencia; no busca información externa.">Activo</label>
+        <input id="asset" class="wide" type="text" maxlength="60" placeholder="AED/CNY OTC" spellcheck="false" />
+      </div>
+      <div class="small muted">Con varias claves, todas opinan sobre los mismos números y gana la mayoría. Cada una lleva su marcador de aciertos.</div>
+
+      <div class="ai-name">1 · ChatGPT (OpenAI)</div>
+      <div class="small" id="ai-status"></div>
+      <div class="field hidden" id="ai-model-row">
+        <label for="ai-model" title="Modelos de chat que tu cuenta de OpenAI tiene disponibles.">Modelo</label>
+        <select id="ai-model"></select>
+      </div>
+      <div class="ai-row">
+        <input id="ai-key" type="password" placeholder="Pega aquí tu clave (sk-…)" autocomplete="off" spellcheck="false" />
+        <button id="btn-ai-save">Guardar</button>
+      </div>
+      <div class="buttons">
+        <button id="btn-ai-page" title="Abre platform.openai.com/api-keys en tu navegador">Conseguir una clave</button>
+        <button id="btn-ai-clear" class="hidden">Quitar clave</button>
+      </div>
+
+      <div class="ai-name">2 · Gemini (Google)</div>
+      <div class="small" id="ai-gemini-status"></div>
+      <div class="field hidden" id="ai-gemini-model-row">
+        <label for="ai-gemini-model" title="Modelos que tu cuenta de Google tiene disponibles.">Modelo</label>
+        <select id="ai-gemini-model"></select>
+      </div>
+      <div class="ai-row">
+        <input id="ai-gemini-key" type="password" placeholder="Pega aquí tu clave de Gemini" autocomplete="off" spellcheck="false" />
+        <button id="btn-ai-gemini-save">Guardar</button>
+      </div>
+      <div class="buttons">
+        <button id="btn-ai-gemini-page" title="Abre aistudio.google.com/apikey en tu navegador">Conseguir una clave</button>
+        <button id="btn-ai-gemini-clear" class="hidden">Quitar clave</button>
+      </div>
+
+      <div class="ai-name">3 · Claude (Anthropic)</div>
+      <div class="small" id="ai-claude-status"></div>
+      <div class="field hidden" id="ai-claude-model-row">
+        <label for="ai-claude-model" title="Modelos que tu cuenta de Anthropic tiene disponibles.">Modelo</label>
+        <select id="ai-claude-model"></select>
+      </div>
+      <div class="ai-row">
+        <input id="ai-claude-key" type="password" placeholder="Pega aquí tu clave de Claude (sk-ant-…)" autocomplete="off" spellcheck="false" />
+        <button id="btn-ai-claude-save">Guardar</button>
+      </div>
+      <div class="buttons">
+        <button id="btn-ai-claude-page" title="Abre platform.claude.com/settings/keys en tu navegador">Conseguir una clave</button>
+        <button id="btn-ai-claude-clear" class="hidden">Quitar clave</button>
+      </div>
+      <div class="small muted">Las claves se guardan cifradas en esta computadora. Cada predicción consulta a cada IA activa y se cobra a esa cuenta.</div>
+
+      <div class="buttons top-gap">
+        <button id="btn-debug" title="Guarda la imagen de la zona y lo leído, para diagnóstico">Guardar captura</button>
+      </div>
+      <div class="small" id="status"></div>
+      <div class="small muted">Describe la gráfica; no predice ni apuesta. Pruébalo en cuenta demo.</div>
+    </div>
+  </div>
+
+  <script src="overlay.js"></script>
+</body>
+</html>

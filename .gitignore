@@ -1,0 +1,4 @@
+# Librerías instaladas (se recuperan con "npm install")
+node_modules/
+# Capturas de diagnóstico
+capturas/

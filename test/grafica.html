@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Gráfica de prueba</title>
+<style>
+  body { margin: 0; background: #222437; }
+  canvas { display: block; }
+  #axis { position: absolute; left: 0; top: 0; width: 760px; height: 380px; }
+</style>
+</head>
+<body>
+<canvas id="c" width="760" height="380"></canvas>
+<!-- Eje de precios y cuadrícula, dibujados en píxeles reales de pantalla (nítidos), como la plataforma -->
+<canvas id="axis"></canvas>
+<script src="gen.js"></script>
+<script>
+  // Uso: grafica.html?seed=7&n=30[&tick=12]
+  //   Dibuja las últimas 20 velas cerradas de las primeras n, la vela n+1 a medio
+  //   formar y la línea del precio actual. La escala vertical se ajusta a lo visible.
+  //   tick = cuánto se ha movido el precio dentro de la vela en curso (por defecto,
+  //   la mitad de su recorrido final). window.draw(n, tick) redibuja sin recargar.
+  const q = new URLSearchParams(location.search);
+  const seed = Number(q.get('seed')) || 7;
+  const VISIBLE = 20, W = 28, GAP = 5, LEFT = 14;
+  const ctx = document.getElementById('c').getContext('2d');
+
+  // Globos de resultado como los de la plataforma: etiqueta negra con importe y
+  // círculo verde (ganada) o rojo (perdida). window.setBadges([{kind:'win'|'loss', x, y}]).
+  let badges = [];
+  let lastArgs = [30, undefined];
+  let extremes = { n: -1, hi: 3, lo: -3 };
+  window.setBadges = function (list) {
+    badges = list || [];
+    window.draw(...lastArgs);
+  };
+  function drawBadge(b) {
+    const color = b.kind === 'win' ? 'rgb(69,183,52)' : 'rgb(255,62,31)';
+    const text = b.kind === 'win' ? '+$1.75' : '$0';
+    const w = b.kind === 'win' ? 62 : 44, h = 20;
+    ctx.fillStyle = 'rgb(0,0,0)';
+    ctx.fillRect(b.x, b.y, w, h);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 14px Arial';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, b.x + 5, b.y + h / 2 + 1);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(b.x + w + 10, b.y + h / 2, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(b.x + w + 5, b.y + h / 2);
+    ctx.lineTo(b.x + w + 9, b.y + h / 2 + 4);
+    ctx.lineTo(b.x + w + 15, b.y + h / 2 - 4);
+    ctx.stroke();
+  }
+
+  window.draw = function (n, tick) {
+    lastArgs = [n, tick];
+    const all = gen.generate(seed, n + 1);
+    const closed = all.slice(Math.max(0, n - VISIBLE), n);
+    const next = all[n];
+    const move = tick === undefined || tick === null ? Math.round((next.close - next.open) / 2) || 1 : tick;
+    // Vela en curso realista: sus mechas son el maximo y el minimo que ha tocado el precio.
+    if (extremes.n !== n) extremes = { n, hi: 3, lo: -3 };
+    extremes.hi = Math.max(extremes.hi, move);
+    extremes.lo = Math.min(extremes.lo, move);
+    const forming = { open: next.open, close: next.open + move, high: next.open + extremes.hi, low: next.open + extremes.lo };
+    const shown = [...closed, forming];
+    const max = Math.max(...shown.map((c) => c.high)), min = Math.min(...shown.map((c) => c.low));
+    const y = (p) => Math.round(20 + (max - p) * (340 / (max - min)));
+
+    ctx.fillStyle = '#222437';
+    ctx.fillRect(0, 0, 760, 380);
+    ctx.fillStyle = 'rgb(80,98,126)';                       // línea del precio actual
+    ctx.fillRect(0, y(forming.close), 760, 1);
+    shown.forEach((c, i) => {
+      const x = LEFT + i * (W + GAP);
+      ctx.fillStyle = c.close >= c.open ? 'rgb(69,183,52)' : 'rgb(255,62,31)';
+      ctx.fillRect(x + W / 2 - 1, y(c.high), 2, Math.max(1, y(c.low) - y(c.high)));   // mecha
+      const top = Math.min(y(c.open), y(c.close)), h = Math.max(2, Math.abs(y(c.open) - y(c.close)));
+      ctx.fillRect(x, top, W, h);                                                      // cuerpo
+    });
+    badges.forEach(drawBadge);
+    // Dónde está de verdad la vela en curso (en px de esta página), para comprobar el seguimiento.
+    window.formingTruth = {
+      x: LEFT + (shown.length - 1) * (W + GAP),
+      w: W,
+      top: Math.min(y(forming.open), y(forming.close)),
+      bottom: Math.max(y(forming.open), y(forming.close)),
+      high: y(forming.high),
+      low: y(forming.low),
+    };
+    drawAxis(max, min, forming.close);
+  };
+
+  // Eje de precios como el de la plataforma: líneas de cuadrícula a pasos redondos y cada
+  // número dibujado 16 px ARRIBA de su línea. window.setAxis(true) lo activa.
+  // Precio "real" de una unidad de la gráfica: 1.20000 + (p - 1000) * 0.00001.
+  const real = (p) => 1.2 + (p - 1000) * 0.00001;
+  let axisOn = q.get('axis') === '1';
+  window.axisTruth = null;
+  window.setAxis = function (on) {
+    axisOn = Boolean(on);
+    window.draw(...lastArgs);
+  };
+  function drawAxis(max, min, current) {
+    const canvas = document.getElementById('axis');
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(760 * dpr), h = Math.round(380 * dpr);
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    const a = canvas.getContext('2d');
+    a.clearRect(0, 0, w, h);
+    window.axisTruth = axisOn ? { price: real(current).toFixed(5) } : null;
+    if (!axisOn) return;
+    const row = (p) => Math.round((20 + (max - p) * (340 / (max - min))) * dpr); // fila en píxeles reales
+    const top = real(max + 20 * (max - min) / 340), bottom = real(min - 20 * (max - min) / 340);
+    // Paso redondo (1, 2, 2.5 o 5 por una potencia de 10) que deje entre 3 y 6 líneas
+    let step = 1e-5;
+    for (const candidate of [0.0001, 0.0002, 0.00025, 0.0005, 0.001, 0.002, 0.0025, 0.005]) {
+      step = candidate;
+      if ((top - bottom) / candidate <= 6) break;
+    }
+    a.font = Math.round(12 * dpr) + 'px Arial';
+    a.textAlign = 'right';
+    a.textBaseline = 'middle';
+    for (let value = Math.ceil(bottom / step) * step; value <= top; value += step) {
+      const y = row((value - 1.2) / 0.00001 + 1000);
+      if (y < 0 || y >= h) continue;
+      a.fillStyle = 'rgb(50,54,78)';
+      a.fillRect(0, y, w, 1);
+      if (y - 16 > 8) {
+        a.fillStyle = 'rgb(150,160,180)';
+        a.fillText(value.toFixed(5), w - Math.round(5 * dpr), y - 16);
+      }
+    }
+  }
+
+  const tickParam = q.get('tick');
+  window.draw(Number(q.get('n')) || 30, tickParam === null ? undefined : Number(tickParam));
+</script>
+</body>
+</html>
