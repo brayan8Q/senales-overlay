@@ -1,0 +1,44 @@
+LECTOR DE TENDENCIA - instalacion en otra computadora (Windows 10 / 11, 64 bits)
+================================================================================
+
+No hay que instalar nada mas: esta carpeta trae el programa completo.
+
+1) COPIAR
+   Copia la carpeta "Lector de tendencia" entera a la otra computadora
+   (por ejemplo al Escritorio). No la dejes dentro del .zip: hay que extraerla.
+
+2) (Opcional) TRAER LOS AJUSTES
+   Doble clic en "Copiar mis ajustes.cmd".
+   Copia el pago, el plazo (5 s), los modelos de IA elegidos y la memoria del mercado.
+   No copia las claves (ver el paso 4).
+
+3) ABRIR
+   Doble clic en "Lector de tendencia.exe".
+   La primera vez Windows puede mostrar "Windows protegio su PC": pulsa
+   "Mas informacion" y luego "Ejecutar de todas formas".
+
+4) PONER LAS CLAVES DE LAS IA
+   En el panel: engrane (ajustes) -> pega la clave de OpenAI, la de Gemini y la de Claude.
+   Las claves NO viajan en esta carpeta: Windows las guarda cifradas para el usuario de
+   cada computadora y en otra no se pueden abrir. Hay que pegarlas una vez en cada equipo.
+   Si no las tienes guardadas, cada bloque del panel tiene un boton que abre la pagina
+   donde se crea una clave nueva.
+
+5) MARCAR LA ZONA
+   Cada pantalla es distinta: vuelve a marcar el recuadro azul sobre la grafica
+   (solo velas y el eje de precios; sin indicadores dentro del recuadro).
+
+6) PLATAFORMA
+   - Grafica: velas (Candles), S15, ventana M10.
+   - "Time" de la operacion: 00:00:05 (igual que el plazo del panel).
+   - Para operar con las flechas: en Pocket Option abre Hotkeys -> "Activate hotkeys",
+     y luego doble clic en "Flechas Pocket Option.cmd".
+       Flecha IZQUIERDA = Buy     Flecha DERECHA = Sell     F8 = pausa
+     Solo actua con la ventana de Pocket Option al frente. Para cerrarlo: icono junto
+     al reloj -> clic derecho -> Salir.
+
+DONDE GUARDA SUS DATOS
+   %APPDATA%\senales-overlay   (registro de senales, memoria del mercado, ajustes, claves cifradas)
+
+RECUERDA
+   El panel solo avisa y mide. No garantiza aciertos: revisa el marcador real y prueba en demo.
