@@ -38,7 +38,12 @@ function fit(pairs) {
 
 const copy = (c) => ({ dir: c.dir, open: c.open, close: c.close, high: c.high, low: c.low });
 
-function createHistory() {
+/**
+ * @param {object} [options]
+ * @param {number} [options.maxCandles]  Cuantas velas cerradas se guardan (por defecto 60). Los
+ *        niveles de soporte y resistencia usan un historial aparte, mas largo (ver levels.js).
+ */
+function createHistory({ maxCandles = MAX_CANDLES } = {}) {
   let candles = []; // velas cerradas, la mas reciente al final
   let prices = []; // { time, value }
   let lost = 0;
@@ -108,7 +113,7 @@ function createHistory() {
                 added = completed.slice(-k).map(copy);
                 candles.push(...added);
               }
-              if (candles.length > MAX_CANDLES) candles = candles.slice(-MAX_CANDLES);
+              if (candles.length > maxCandles) candles = candles.slice(-maxCandles);
             }
           }
         }

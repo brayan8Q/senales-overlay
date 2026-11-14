@@ -86,7 +86,32 @@ function showSettings(open) {
   settingsOpen = open;
   $('settings').classList.toggle('hidden', !open);
   $('btn-settings').classList.toggle('on', open);
+  panel.classList.toggle('wide', open); // los ajustes necesitan el ancho completo
 }
+
+// Panel compacto (por defecto): solo la señal, su % de confianza, el botón y el marcador.
+// El botón ▾ de la cabecera muestra u oculta el detalle (lecturas, patrón, memoria...).
+let compact = true;
+try {
+  compact = localStorage.getItem('panel-detalle') !== '1';
+} catch {
+  /* sin almacenamiento: se queda compacto */
+}
+function applyCompact() {
+  panel.classList.toggle('compact', compact);
+  $('btn-details').textContent = compact ? '▾' : '▴';
+  $('btn-details').classList.toggle('on', !compact);
+}
+$('btn-details').addEventListener('click', () => {
+  compact = !compact;
+  try {
+    localStorage.setItem('panel-detalle', compact ? '0' : '1');
+  } catch {
+    /* no es critico */
+  }
+  applyCompact();
+});
+applyCompact();
 $('btn-settings').addEventListener('click', () => showSettings(!settingsOpen));
 $('btn-zone').addEventListener('click', startSelect);
 $('btn-auto').addEventListener('click', () => api.toggleAuto());
@@ -194,38 +219,56 @@ function renderScan(s) {
     return;
   }
   const marks = $('scan-marks');
-  if (scanShown !== scan.candles.length) {
-    marks.textContent = '';
+  if (scan.mode !== 'analysis') {
+    // Fuera del análisis no hay recuadro por vela (se vuelven a revelar, al paso del haz, en el siguiente).
+    if (scanShown) marks.textContent = '';
+    scanShown = 0;
+  } else {
+    if (scanShown !== scan.candles.length) {
+      marks.textContent = '';
+      scan.candles.forEach((c, i) => {
+        const mark = document.createElement('div');
+        mark.className = 'scan-mark';
+        mark.style.animationDelay = `${Math.round((i * 900) / scan.candles.length)}ms`;
+        marks.appendChild(mark);
+      });
+      scanShown = scan.candles.length;
+    }
     scan.candles.forEach((c, i) => {
-      const mark = document.createElement('div');
-      mark.className = 'scan-mark';
-      mark.style.animationDelay = `${Math.round((i * 900) / scan.candles.length)}ms`;
-      marks.appendChild(mark);
+      const mark = marks.children[i];
+      mark.classList.toggle('current', i === scan.candles.length - 1);
+      mark.style.left = `${c.x - 2}px`;
+      mark.style.width = `${c.w + 4}px`;
+      mark.style.top = `${c.y - 2}px`;
+      mark.style.height = `${c.h + 4}px`;
     });
-    scanShown = scan.candles.length;
   }
-  scan.candles.forEach((c, i) => {
-    const mark = marks.children[i];
-    mark.classList.toggle('current', i === scan.candles.length - 1);
-    mark.style.left = `${c.x - 2}px`;
-    mark.style.width = `${c.w + 4}px`;
-    mark.style.top = `${c.y - 2}px`;
-    mark.style.height = `${c.h + 4}px`;
-  });
-  for (const [id, row] of [['scan-support', scan.support], ['scan-resistance', scan.resistance]]) {
-    $(id).classList.toggle('hidden', row === null);
-    if (row !== null) $(id).style.top = `${row}px`;
+  // Soporte y resistencia: la línea, cuántos toques tiene y si está vigente o invertido
+  // (invertido = el precio lo cruzó una vez y ahora hace el papel contrario).
+  for (const [id, level, name, was] of [
+    ['scan-support', scan.support, 'soporte', 'era resistencia'],
+    ['scan-resistance', scan.resistance, 'resistencia', 'era soporte'],
+  ]) {
+    $(id).classList.toggle('hidden', !level);
+    if (!level) continue;
+    $(id).style.top = `${level.row}px`;
+    $(id).classList.toggle('flipped', level.flipped);
+    const touches = `${level.touches} ${level.touches === 1 ? 'toque' : 'toques'}`;
+    $(id).querySelector('span').textContent = `${name} · ${touches} · ${level.flipped ? `invertido (${was})` : 'vigente'}`;
   }
   $('scan').classList.toggle('signal', scan.mode === 'signal');
+  // En reposo (o esperando la vela siguiente) solo se sigue la vela actual: sin haz ni recuadros.
+  $('scan').classList.toggle('follow', scan.mode === 'follow');
   renderCurrentCandle(scan.current);
   renderEntry(scan);
   const state = scan.verified ? 'lectura verificada ✓' : 'verificando lectura…';
   const saved = scan.saved ? ` · ${scan.saved} en memoria` : '';
   const rate = scan.rate ? ` · ${scan.rate} lecturas/s` : '';
-  $('scan-label').textContent =
-    scan.mode === 'signal'
-      ? `SIGUIENDO LA VELA ACTUAL · ${state}${rate}`
-      : `ESCANEANDO · ${scan.candles.length} velas${saved} · ${state}${rate}${who}`;
+  const label = $('scan-label');
+  label.classList.toggle('warn', Boolean(scan.missing));
+  if (scan.missing) label.textContent = 'LA VELA ACTUAL NO ESTÁ A LA VISTA';
+  else if (scan.mode === 'analysis') label.textContent = `ESCANEANDO · ${scan.candles.length} velas${saved} · ${state}${rate}${who}`;
+  else label.textContent = `SIGUIENDO LA VELA ACTUAL · ${state}${rate}`;
 }
 
 /** Coloca un elemento del escáner (en puntos, relativos a la zona). */
@@ -241,7 +284,8 @@ function placeScan(id, box) {
  * extremos, línea de apertura, marcador del precio en vivo y reloj de la vela.
  */
 function renderCurrentCandle(c) {
-  const ids = ['scan-body', 'scan-wick', 'scan-high', 'scan-low', 'scan-open', 'scan-now', 'scan-info', 'scan-clock'];
+  const ids = ['scan-body', 'scan-wick', 'scan-high', 'scan-low', 'scan-open', 'scan-now', 'scan-info', 'scan-clock', 'scan-clock-text'];
+  // Si la vela en curso no está a la vista no se marca ninguna (nunca una vela vieja).
   if (!c) {
     for (const id of ids) $(id).classList.add('hidden');
     return;
@@ -250,7 +294,7 @@ function renderCurrentCandle(c) {
   const center = c.x + c.w / 2;
   // Cuerpo: recuadro justo sobre sus bordes (mínimo 3 px de alto para que se vea en una vela plana).
   const bodyHeight = Math.max(3, c.bodyBottom - c.bodyTop);
-  placeScan('scan-body', { left: c.x - 1, width: c.w + 2, top: c.bodyTop - 1, height: bodyHeight + 2 }).classList.toggle('covered', c.covered);
+  placeScan('scan-body', { left: c.x - 1, width: c.w + 2, top: c.bodyTop - 1, height: bodyHeight + 2 });
   // Mechas: del máximo al mínimo, por el centro de la vela.
   placeScan('scan-wick', { left: center - 1, top: c.high, height: Math.max(0, c.low - c.high) });
   const high = placeScan('scan-high', { left: c.x - 4, width: c.w + 8, top: c.high - 1 });
@@ -267,13 +311,44 @@ function renderCurrentCandle(c) {
   const body = c.bodyPips === null ? '' : ` · cuerpo ${c.up ? '+' : '−'}${c.bodyPips} pips`;
   const info = placeScan('scan-info', { left: center, top: Math.max(22, c.high - 12) });
   const figure = c.figure ? ` · figura: ${c.figure}` : '';
-  info.textContent = c.covered ? 'vela actual tapada: última lectura buena' : `vela actual: ${c.pattern || (c.up ? 'verde' : 'roja')}${body}${figure}`;
-  // Reloj de la vela: cuánto lleva de lo que dura.
+  info.textContent = `vela actual: ${c.pattern || (c.up ? 'verde' : 'roja')}${body}${figure}`;
+  // Reloj de la vela: la barrita (cuánto lleva de lo que dura) y, en números, los segundos que
+  // lleva y los que le faltan para cerrar.
   if (c.seconds && c.elapsed !== null) {
     const clock = placeScan('scan-clock', { left: c.x - 1, width: c.w + 2, top: c.low + 8 });
     clock.querySelector('i').style.width = `${Math.min(100, (100 * c.elapsed) / c.seconds)}%`;
-    clock.title = `${Math.min(c.elapsed, c.seconds).toFixed(0)} s de ${c.seconds}`;
   } else $('scan-clock').classList.add('hidden');
+  const text = placeScan('scan-clock-text', { left: center, top: c.low + 15 });
+  if (c.elapsed === null) text.textContent = 'reloj: esperando a ver cerrar una vela';
+  else if (c.remaining === null) text.textContent = `lleva ${Math.floor(c.elapsed)} s · midiendo cuánto dura la vela`;
+  else text.textContent = `lleva ${Math.floor(Math.min(c.elapsed, c.seconds))} s · faltan ${Math.ceil(c.remaining)} s`;
+}
+
+/**
+ * Zona de entrada: dos líneas (la del mejor precio y la límite) y, entre las dos, la franja donde
+ * está bien entrar. Se atenúa cuando el precio se sale de la zona.
+ */
+function renderZone(e, sell) {
+  const zone = $('scan-zone');
+  if (!e || !e.zone) {
+    zone.classList.add('hidden');
+    return;
+  }
+  const top = Math.min(e.zone.best, e.zone.limit);
+  zone.classList.remove('hidden');
+  zone.classList.toggle('sell', sell);
+  zone.classList.toggle('out', e.zone.inside === false);
+  zone.style.top = `${top}px`;
+  zone.style.height = `${Math.max(2, Math.abs(e.zone.best - e.zone.limit))}px`;
+  const prices = e.zone.bestQuote ? ` · ${sell ? e.zone.limitQuote : e.zone.bestQuote} – ${sell ? e.zone.bestQuote : e.zone.limitQuote}` : '';
+  // Un solo rótulo, por fuera de la franja (encima de la línea de arriba), para que nada se encime.
+  zone.querySelector('b').textContent = `${sell ? 'ZONA DE VENTA ▼' : 'ZONA DE COMPRA ▲'}${prices}${e.zone.inside === false ? ' · precio fuera' : ''}`;
+  // Cada línea lleva su etiqueta al final, a la derecha. En una venta el mejor precio es la de
+  // arriba y el límite la de abajo; en una compra, al revés.
+  zone.querySelector('i').textContent = 'mejor precio';
+  zone.querySelector('i').className = sell ? 'top' : 'bottom';
+  zone.querySelector('u').textContent = 'límite';
+  zone.querySelector('u').className = sell ? 'bottom' : 'top';
 }
 
 /** Durante la señal: línea en el precio de entrada y cuántos pips va a favor o en contra. */
@@ -283,6 +358,7 @@ function renderEntry(scan) {
   if (scan.mode !== 'signal' || !scan.entry) {
     el.classList.add('hidden');
     target.classList.add('hidden');
+    $('scan-zone').classList.add('hidden');
     return;
   }
   const e = scan.entry;
@@ -295,10 +371,22 @@ function renderEntry(scan) {
   target.classList.remove('hidden');
   target.classList.toggle('sell', sell);
   target.style.top = `${sell ? e.row + 1 : e.row - 55}px`;
+  // Entrada sugerida: línea de puntos mientras el precio no llega; firme desde que llega.
+  el.classList.toggle('pending', Boolean(e.suggested) && !e.taken);
+  // Con zona de entrada, la franja es la zona misma (entre sus dos líneas), no la de "hacia dónde".
+  target.classList.toggle('hidden', Boolean(e.suggested) && (!e.taken || Boolean(e.zone)));
+  renderZone(e, sell);
+  el.classList.toggle('ref', Boolean(e.zone)); // con zona, la entrada es una raya fina de referencia
   let text = sell ? 'VENTA ▼ sugerida' : 'COMPRA ▲ sugerida';
+  if (e.suggested) {
+    const side = sell ? 'VENTA ▼' : 'COMPRA ▲';
+    if (e.zone) text = `entrada ${sell ? '▼' : '▲'}`; // corto: la zona ya dice de qué lado es
+    else text = e.taken ? `ENTRADA ${side} tomada aquí · ${e.kind}` : `ENTRA EN ${side} cuando el precio llegue aquí · ${e.kind}`;
+  }
   if (e.quote) text += ` · ${e.quote}`;
-  if (e.confidence === 'baja') text += ' · confianza baja';
+  if (e.confidence === 'baja' && !e.zone) text += ' · confianza baja';
   if (e.pips !== null) text += e.pips > 0 ? ` · va ganando +${e.pips} pips` : e.pips < 0 ? ` · va perdiendo ${e.pips} pips` : ' · va igual';
+  else if (e.suggested && e.taken) text += e.ahead > 0 ? ' · va ganando' : e.ahead < 0 ? ' · va perdiendo' : ' · va igual';
   el.querySelector('b').textContent = text;
 }
 
@@ -311,16 +399,30 @@ function modelLabel(id) {
     .replace(/-(?=[A-Z])/g, ' ');
 }
 
+/** Tiempo que falta, corto: "45 s" o, de un minuto en adelante, "4:12". */
+function clockText(ms) {
+  const seconds = Math.ceil(ms / 1000);
+  return seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
 /** Barra: durante el análisis avanza por pasos; durante la señal se vacía hasta calificarla. */
 function renderProgress(s) {
   const bar = $('progress');
   const timed = s.cycleSeconds > 0;
-  if (!timed || (s.phase !== 'analysis' && s.phase !== 'signal')) {
+  if (!timed || (s.phase !== 'analysis' && s.phase !== 'signal' && s.phase !== 'waiting')) {
     bar.classList.add('hidden');
     return;
   }
   bar.classList.remove('hidden');
-  if (s.phase === 'analysis') {
+  if (s.phase === 'waiting') {
+    // PREDECIR con la vela ya avanzada: cuenta regresiva hasta que abra la vela siguiente.
+    bar.className = 'waiting';
+    const total = Math.max(1, s.candleSeconds * 1000);
+    $('progress-fill').style.width = s.clockKnown ? `${Math.round(Math.min(1, Math.max(0, 1 - s.remainingMs / total)) * 100)}%` : '100%';
+    $('progress-text').textContent = s.clockKnown
+      ? `Esperando la siguiente vela · abre en ${Math.ceil(s.remainingMs / 1000)} s`
+      : 'Esperando la siguiente vela…';
+  } else if (s.phase === 'analysis') {
     // Avanza por las 8 lecturas, como "analizando · 6 de 8".
     const steps = ['tendencia', 'EMA', 'momentum', 'RSI', 'mov. 1 min', 'nivel', 'sesión', 'resumen'];
     const total = Math.max(1, s.pauseSeconds * 1000);
@@ -333,11 +435,23 @@ function renderProgress(s) {
     bar.className = 'analysis';
     $('progress-fill').style.width = `${Math.round(done * 100)}%`;
     $('progress-text').textContent = `${who} · ${index + 1} de ${steps.length}: ${steps[index]}`;
+  } else if (!s.signal || !s.signal.dir) {
+    // No salió predicción (ESPERAR): el panel se libera en unos segundos para pedir otra.
+    const total = Math.max(1, Math.min(s.cycleSeconds * 1000, 10000));
+    bar.className = 'signal';
+    $('progress-fill').style.width = `${Math.round(Math.min(1, s.remainingMs / total) * 100)}%`;
+    $('progress-text').textContent = `Sin predicción · listo en ${clockText(s.remainingMs)}`;
+  } else if (s.untilClose) {
+    // La señal vale hasta el cierre de la vela: la barra se vacía con lo que le falta a la vela.
+    const total = Math.max(1, s.candleSeconds * 1000);
+    bar.className = 'signal';
+    $('progress-fill').style.width = `${Math.round(Math.min(1, s.remainingMs / total) * 100)}%`;
+    $('progress-text').textContent = s.remainingMs > 0 ? `Se califica al cierre de la vela · ${Math.ceil(s.remainingMs / 1000)} s` : 'Cerró la vela: calificando…';
   } else {
     const total = Math.max(1, s.cycleSeconds * 1000);
     bar.className = 'signal';
     $('progress-fill').style.width = `${Math.round(Math.min(1, s.remainingMs / total) * 100)}%`;
-    $('progress-text').textContent = `Se califica en ${Math.ceil(s.remainingMs / 1000)} s`;
+    $('progress-text').textContent = `Se califica en ${clockText(s.remainingMs)}`;
   }
 }
 
@@ -351,16 +465,26 @@ api.onState((s) => {
   // --- Señal ---
   const dir = s.signal && s.signal.dir;
   const analyzing = s.phase === 'analysis';
+  const waiting = s.phase === 'waiting'; // PREDECIR pulsado con la vela avanzada: se espera a la siguiente
   const manual = s.manual && s.cycleSeconds > 0;
   const resting = manual && s.phase === 'idle'; // modo manual, esperando a que pulsen PREDECIR
 
-  // Botón PREDECIR: activo solo cuando hay gráfica y no hay una predicción en curso.
+  // Botón PREDECIR: activo solo cuando hay gráfica y no hay una predicción en curso (ni esperando,
+  // ni analizando, ni con señal): así no se enciman predicciones.
   const predict = $('btn-predict');
   predict.classList.toggle('hidden', !manual);
   predict.disabled = !(resting && s.ready);
-  predict.textContent = analyzing ? 'Analizando…' : s.phase === 'signal' ? 'Señal en curso' : 'PREDECIR';
+  const noSide = s.phase === 'signal' && !(s.signal && s.signal.dir); // salió ESPERAR: no hay predicción
+  predict.textContent = waiting ? 'Esperando la vela…' : analyzing ? 'Analizando…' : noSide ? 'Sin predicción…' : s.phase === 'signal' ? 'Señal en curso' : 'PREDECIR';
 
-  if (resting) {
+  if (waiting) {
+    $('signal').className = 'waiting';
+    $('signal-label').textContent = 'ESPERANDO LA SIGUIENTE VELA';
+    $('signal-detail').textContent = s.clockKnown
+      ? `La vela en curso ya va avanzada. La nueva abre en ${Math.ceil(s.remainingMs / 1000)} s: ahí empiezo el análisis.`
+      : 'La vela en curso ya va avanzada. Empiezo el análisis en cuanto abra la nueva.';
+    $('signal-source').textContent = '';
+  } else if (resting) {
     $('signal').className = 'wait';
     $('signal-label').textContent = 'LISTO';
     $('signal-detail').textContent = s.lastResult
@@ -382,6 +506,27 @@ api.onState((s) => {
     let source = s.signal && s.signal.source ? (s.signal.source === 'ia' ? 'IA' : 'reglas') : '';
     if (source && dir && s.signal.confidence) source += ` · ${s.signal.confidence}`;
     $('signal-source').textContent = source;
+  }
+  // Porcentaje de confianza de la señal en curso: de las señales de su mismo nivel (alta, media,
+  // baja) ya calificadas, cuántas acertaron. Verde si supera el mínimo que pide el pago; ámbar si no.
+  const conf = !waiting && !resting && !analyzing ? s.confidence : null;
+  const pct = $('signal-pct');
+  const note = $('signal-pct-note');
+  note.classList.toggle('hidden', !conf);
+  if (conf) {
+    pct.className = conf.rate === null ? '' : conf.rate >= s.trades.breakEven ? 'good' : 'bad';
+    pct.textContent = conf.rate === null ? '— %' : `${conf.rate} %`;
+    note.textContent = conf.total
+      ? `confianza ${conf.level} · acertó ${conf.wins} de ${conf.total}${conf.total < 20 ? ' · pocas señales' : ''}`
+      : `confianza ${conf.level} · aún sin señales medidas`;
+  } else pct.className = 'hidden';
+  // Entrada sugerida: dónde esperar el precio y si ya llegó a la línea.
+  const plan = conf && dir ? s.entry : null;
+  $('signal-entry').classList.toggle('hidden', !plan);
+  if (plan) {
+    $('signal-entry').classList.toggle('taken', plan.zone ? plan.inZone !== false : plan.filled);
+    if (plan.zone) $('signal-entry').textContent = plan.inZone === false ? 'precio FUERA de la zona de entrada' : 'precio DENTRO de la zona de entrada';
+    else $('signal-entry').textContent = plan.filled ? `✔ entrada tomada en la línea (${plan.kind})` : `espera el precio en la línea · ${plan.kind}`;
   }
   renderProgress(s);
 
@@ -447,9 +592,10 @@ api.onState((s) => {
   $('sc-line').textContent = m ? `${measured}: ${s.live.wins} de ${m} (${s.live.hitRate} %)` : `${measured}: aún sin datos`;
   $('sc-line').title = s.live.verdict + (s.lastResult ? ` Última señal: ${s.lastResult}.` : '');
 
-  // Escáner sobre la gráfica mientras se analiza.
-  $('scan').classList.toggle('hidden', !s.scanning);
-  if (s.scanning) renderScan(s);
+  // Sobre la gráfica: el marcador de la vela actual y los niveles van siempre que el panel está
+  // leyendo; el haz y el recuadro de cada vela, solo mientras se analiza.
+  $('scan').classList.toggle('hidden', !s.scan);
+  if (s.scan) renderScan(s);
   else scanShown = 0;
 
   // Costo aproximado por predicción de cada IA y cuánto tarda.

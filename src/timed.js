@@ -27,6 +27,7 @@ const { trendSignal, candlePattern, climax } = require('./signal');
 const { findFormation } = require('./formations');
 const { summarize } = require('./score');
 const { sameCandles } = require('./tracker');
+const { suggestZone } = require('./entry');
 
 const REFERENCE_CANDLES = 4;
 const VOTES_NEEDED = 2;
@@ -38,6 +39,22 @@ const MAX_HOLD_MS = 5000; // en modo manual, cuanto mas se espera a la IA pasada
 const SCORE_EARLY_MS = 700;
 const SCORE_LATE_MS = 1500;
 const SCORE_MAX_WAIT_MS = 4000;
+
+// ---------- PREDECIR alineado con el cambio de vela (modo manual) ----------
+// Al pulsar PREDECIR: si la vela en curso lleva abierta esto o menos (o menos de 1/3 de su
+// duracion, lo que sea menor) se analiza y se predice ESA vela; si ya va mas avanzada, se
+// espera a que abra la siguiente y ahi empieza el analisis.
+const EARLY_CANDLE_MS = 8000;
+// Mientras se espera la vela siguiente: si el precio deja de llegar durante este tiempo, se
+// cancela y el panel vuelve a LISTO.
+const PRICE_LOST_MS = 90000;
+// FRENO para la IA: con cuantas velas cerradas seguidas del mismo color ya no se sigue ese lado.
+const AI_STREAK_BRAKE = 4;
+// Cuando NO sale prediccion (ESPERAR: ninguna lectura clara), no hay nada que medir durante todo
+// el plazo: el panel se libera a este tiempo para poder pedir otra (con plazos cortos, al plazo).
+const NO_SIGNAL_MS = 10000;
+// Si todavia no se sabe cuanto dura la vela, solo se arranca recien visto un cierre.
+const UNKNOWN_CANDLE_START_MS = 2000;
 
 /** Precio relativo a un grupo de velas: 0 = su minimo, 1 = su maximo. */
 function relativePrice(priceY, candles) {
@@ -278,6 +295,9 @@ function createTimedTracker() {
   let watching = null; // analisis en curso: { mark, time }
   let observed = false; // ya hubo un analisis desde la ultima senal
   let armed = false; // modo manual: el usuario pidio una prediccion
+  // PREDECIR alineado: esperando a que abra la vela siguiente.
+  //   { since, lastPriceAt, closeAt }  closeAt = cuando abrio la vela que se puede predecir (null = aun no)
+  let waiting = null;
   let moves = []; // movimientos del precio por tramos
   let ticks = []; // lecturas recientes de la linea de precio: { time, value, reference }
   let lastGood = null; // ultima lectura buena: { time, priceY, completed }
@@ -298,6 +318,22 @@ function createTimedTracker() {
       abs: quote ? quote.value : null,
     };
   };
+
+  /** Fila (pixeles de esta lectura) donde queda una marca de precio, o null si no se puede ubicar. */
+  const rowOfMark = (mark, priceY, completed, quote) => {
+    if (!mark) return null;
+    if (mark.abs !== null && quote && priceY !== null) return priceY - (mark.abs - quote.value) / quote.perPixel;
+    if (!mark.reference) return null;
+    const segment = findReference(mark.reference, completed);
+    if (!segment) return null;
+    const high = Math.max(...segment.map((c) => c.high));
+    const low = Math.min(...segment.map((c) => c.low));
+    return -(low + mark.price * (high - low || 1));
+  };
+
+  /** Marca de un precio dado por su fila (no el del instante): para la linea de entrada sugerida. */
+  const markAtRow = (row, priceY, completed, quote) =>
+    markNow(row, completed, quote && priceY !== null ? { value: quote.value + (priceY - row) * quote.perPixel, perPixel: quote.perPixel } : null);
 
   /** Movimiento del precio desde una marca: 'up' | 'down' | 'flat', o null si no se puede medir. */
   const moveSince = (mark, priceY, completed, quote) => {
@@ -380,6 +416,12 @@ function createTimedTracker() {
      * @param {boolean} [input.formingOk]  false = la vela en curso esta tapada: su patron no vota.
      * @param {number} [input.entryMs]  Cuanto tarda el usuario en poner la orden tras ver la senal. La
      *        senal se mide desde ese momento y durante cycleMs (el tramo que de verdad se opera).
+     * @param {boolean} [input.align]  Modo manual: PREDECIR se alinea con el cambio de vela y la
+     *        senal vale hasta el CIERRE de esa vela (se califica ahi, contra el precio de la senal).
+     * @param {{known:boolean, seconds:number, elapsedMs:number|null, remainingMs:number|null,
+     *          closedNow:boolean, closeRow:number|null}} [input.candle]  Reloj de la vela en curso
+     *        (ver candleclock.js). closedNow = acaba de cerrar una vela; closeRow = fila del cierre
+     *        de la ultima vela cerrada, si esta lectura es de fiar (null si no).
      */
     update({
       candles,
@@ -399,8 +441,14 @@ function createTimedTracker() {
       quote = null,
       formingOk = true,
       entryMs = 0,
+      align = false,
+      waitNext = true, // con `align`: esperar a que abra la vela siguiente si la actual ya va avanzada
+      suggest = false, // zona de entrada sugerida: dos lineas entre las que esta bien entrar (ver entry.js)
+      candle = null,
     }) {
       const completed = candles.slice(0, -1);
+      const aligned = Boolean(align) && manual; // solo con el boton PREDECIR
+      const clockKnown = Boolean(candle && candle.known);
       let status = 'ok';
       if (candles.length < 3) status = 'no-chart';
       else if (priceY === null) status = 'no-price';
@@ -421,12 +469,45 @@ function createTimedTracker() {
         } else if (now - pending.time >= pending.entryMs + 1000) pending.entered = true; // no se pudo leer: vale la marca de la senal
       }
 
+      // 0b) Entrada sugerida: la senal marca una linea un poco en contra (mas arriba en una venta,
+      //     mas abajo en una compra). En cuanto el precio llega a la linea la entrada se da por
+      //     tomada, y desde ahi se mide: la referencia pasa a ser el precio de la linea.
+      if (pending && pending.entry && !pending.entry.filled && clean && priceY !== null && !pending.dueAt) {
+        const ended = pending.untilClose ? Boolean(candle && candle.closedNow && now > pending.time) : now - pending.time >= cycleMs + pending.entryMs;
+        const entryRow = ended ? null : rowOfMark(pending.entry.mark, priceY, completed, quote);
+        if (entryRow !== null && (pending.dir === 'down' ? priceY <= entryRow + 0.5 : priceY >= entryRow - 0.5)) {
+          pending.entry.filled = true;
+          pending.entry.filledAt = now;
+          pending.mark = pending.entry.mark;
+        }
+      }
+
       // 1) Termino la senal: se califica. Si justo ahora la grafica esta tapada, se usa la
       //    ultima lectura buena (si es de ese momento) o se espera un poco a que se destape.
       let sample = null;
       let giveUp = false;
-      if (pending && now - pending.time >= cycleMs + pending.entryMs) {
-        const due = pending.time + cycleMs + pending.entryMs;
+      if (pending && pending.untilClose) {
+        // La senal vale hasta el CIERRE de la vela: se califica cuando cierra (visto en la grafica,
+        // o dado por el reloj si algo la tapaba), comparando ese cierre con el precio de la senal.
+        if (!pending.dueAt && candle && candle.closedNow && now > pending.time) pending.dueAt = now;
+        if (!pending.dueAt && now - pending.time > pending.maxWaitMs) {
+          pending.dueAt = now; // no se llego a ver ni a inferir el cierre: no se inventa un resultado
+          pending.lost = true;
+        }
+        if (pending.dueAt) {
+          const closeRow = candle && Number.isFinite(candle.closeRow) ? candle.closeRow : null;
+          if (pending.lost) giveUp = true;
+          else if (clean && closeRow !== null) {
+            // El cierre exacto de la vela que acaba de cerrar (no el precio de un instante despues).
+            sample = {
+              priceY: closeRow,
+              completed,
+              quote: quote && priceY !== null ? { value: quote.value + (priceY - closeRow) * quote.perPixel, perPixel: quote.perPixel } : null,
+            };
+          } else if (now - pending.dueAt > pending.graceMs) giveUp = true; // la grafica siguio tapada
+        }
+      } else if (pending && now - pending.time >= pending.spanMs + pending.entryMs) {
+        const due = pending.time + pending.spanMs + pending.entryMs;
         if (clean) {
           if (pending.waited && now - due > SCORE_LATE_MS) giveUp = true;
           else sample = { priceY, completed, quote };
@@ -437,8 +518,12 @@ function createTimedTracker() {
       if (sample || giveUp) {
         const move = sample ? moveSince(pending.mark, sample.priceY, sample.completed, sample.quote) : null;
         remember(move);
+        // Sin lado no hubo prediccion: se dice asi (antes se quedaba el resultado de la senal anterior).
+        if (!pending.dir) lastResult = 'no dio predicción (sin lectura clara)';
         if (pending.dir) {
-          if (giveUp) lastResult = 'no se pudo medir (la gráfica estaba tapada)';
+          // Con entrada sugerida: si el precio nunca llego a la linea, no hubo operacion que medir.
+          if (pending.entry && !pending.entry.filled) lastResult = 'sin entrada: el precio no llegó a la línea sugerida';
+          else if (giveUp) lastResult = 'no se pudo medir (la gráfica estaba tapada)';
           else if (move === null) lastResult = 'no se pudo medir (cambió la gráfica)';
           else if (move === 'flat') {
             live.ties++;
@@ -469,8 +554,31 @@ function createTimedTracker() {
         }
       }
 
+      // 2b) PREDECIR alineado con la vela: se predice la vela en curso solo si acaba de abrir; si ya
+      //     va avanzada, se espera a que abra la siguiente y el analisis empieza justo ahi.
+      //     (Con waitNext = false no se espera nunca: PREDECIR analiza y predice al momento.)
+      let hold = false;
+      if (aligned && waitNext && armed && !pending && !watching && !observed) {
+        if (!waiting) waiting = { since: now, lastPriceAt: now, closeAt: clockKnown ? now - candle.elapsedMs : null };
+        if (candle && candle.closedNow) waiting.closeAt = now; // acaba de abrir una vela nueva
+        if (status === 'ok') waiting.lastPriceAt = now;
+        const limit = clockKnown ? Math.min(EARLY_CANDLE_MS, (candle.seconds * 1000) / 3) : UNKNOWN_CANDLE_START_MS;
+        const fresh = waiting.closeAt !== null && now - waiting.closeAt <= limit;
+        if (fresh && status === 'ok') {
+          waiting = null; // la vela acaba de abrir: se analiza y se predice ESTA
+        } else if (now - waiting.lastPriceAt >= PRICE_LOST_MS) {
+          // El precio dejo de llegar: se cancela y el panel vuelve a LISTO.
+          waiting = null;
+          armed = false;
+          lastResult = `se canceló: el precio dejó de llegar durante ${Math.round(PRICE_LOST_MS / 1000)} s`;
+        } else {
+          if (!fresh) waiting.closeAt = null; // esa vela ya va avanzada: toca esperar a la siguiente
+          hold = true;
+        }
+      } else if (waiting) waiting = null;
+
       // 3) Sin senal ni analisis en curso: empieza lo que toque (en manual, solo si se pidio).
-      if (!pending && !watching && status === 'ok' && (!manual || armed)) {
+      if (!hold && !pending && !watching && status === 'ok' && (!manual || armed)) {
         const mark = markNow(priceY, completed, quote);
         if (mark && pauseMs > 0 && !observed) {
           watching = { mark, time: now };
@@ -495,6 +603,33 @@ function createTimedTracker() {
           if (useAi && dir && liveNow.vote === (dir === 'up' ? -2 : 2)) {
             confidence = 'baja';
             reason = `Ojo: ahora mismo el precio va en contra (${liveNow.text}). ${reason}`;
+          }
+          // FRENO PARA LA IA (13 nov 2026): los mismos frenos que ya tenian las reglas del panel.
+          // La IA tiende a seguir lo que viene pasando. Si la vela en curso YA esta estirada hacia
+          // el lado de la senal (cuerpo de 1.5 veces lo normal o mas), o ya van 4 o mas velas
+          // cerradas seguidas de ese color, seguirla es entrar al final del movimiento (la senal
+          // de las 19:10 del 13 nov: tres IA dijeron ABAJO en el piso de una caida y reboto).
+          //   - Sin "dar siempre un lado": la senal queda en ESPERAR.
+          //   - Con "dar siempre un lado": se conserva el lado de la IA, como confianza baja.
+          // No aplica si esta medido que en esta grafica el precio viene CONTINUANDO.
+          let braked = false;
+          if (useAi && dir && !(regime && regime.kind === 'continua')) {
+            let streak = 0;
+            for (let i = completed.length - 1; i >= 0 && completed[i].dir === dir; i--) streak++;
+            let why = '';
+            if (pattern.blocks === dir) why = `la vela en curso está ${pattern.text}`;
+            else if (streak >= AI_STREAK_BRAKE) why = `ya van ${streak} velas ${dir === 'up' ? 'verdes' : 'rojas'} seguidas`;
+            if (why) {
+              braked = true;
+              if (force) {
+                confidence = 'baja';
+                reason = `Freno: ${why}; seguirla es entrar al final del movimiento. ${reason}`;
+              } else {
+                reason = `Freno: ${why}. La IA decía ${dir === 'up' ? 'ARRIBA' : 'ABAJO'}, pero no se persigue un movimiento que ya ocurrió.`;
+                dir = null;
+                confidence = 'ninguna';
+              }
+            }
           }
           // FRENO: no perseguir un movimiento agotado. Si el precio ya recorrio mucho en pocas
           // velas y esta en el extremo de lo que se ve, una senal en esa misma direccion (de la
@@ -527,12 +662,37 @@ function createTimedTracker() {
               reason = `No se persigue un movimiento agotado: ${spent.text}. Espero la señal de giro.`;
             }
           }
+          // Con el reloj de la vela en hora, la senal vale hasta el cierre de la vela en curso y se
+          // mide contra el precio de este instante. Sin reloj (aun no se sabe cuanto dura la vela)
+          // no se promete un cierre que no se puede ubicar: esa senal se califica a los cycleMs.
+          // Sin lado (ESPERAR) no se espera ni al cierre de la vela ni al plazo entero: 10 segundos.
+          const untilClose = aligned && clockKnown && Boolean(dir);
+          // Zona de entrada sugerida (ver entry.js): dos lineas, la del mejor precio (la orilla) y la
+          // limite. El precio de la senal queda dentro, asi que la entrada de referencia es la de
+          // este instante (`mark`): desde ahi se mide la senal.
+          let entryPlan = null;
+          if (suggest && dir) {
+            const ranges = completed.slice(-20).map((c) => c.high - c.low).sort((a, b) => a - b);
+            const zone = suggestZone({ dir, priceY, forming: current, unit: ranges[Math.floor((ranges.length - 1) / 2)] || 0 });
+            const best = zone ? markAtRow(zone.bestRow, priceY, completed, quote) : null;
+            const limit = zone ? markAtRow(zone.limitRow, priceY, completed, quote) : null;
+            if (best && limit) entryPlan = { mark, best, limit, kind: 'zona', text: zone.text, filled: true, filledAt: now };
+          }
           pending = {
             dir,
             mark,
             time: now,
-            entryMs: Math.max(0, entryMs || 0),
-            entered: !(entryMs > 0),
+            entryMs: untilClose ? 0 : Math.max(0, entryMs || 0),
+            entered: untilClose || !(entryMs > 0),
+            untilClose,
+            // Cuanto dura la senal cuando se mide por segundos: el plazo; sin prediccion, 10 s como mucho.
+            spanMs: dir ? cycleMs : Math.min(cycleMs, NO_SIGNAL_MS),
+            entry: entryPlan, // linea de entrada sugerida: { mark, kind, text, filled }
+            // Tope para ver (o inferir) el cierre: lo que le falta a la vela mas una vela entera.
+            maxWaitMs: untilClose ? candle.remainingMs + candle.seconds * 1000 : 0,
+            // Si al cierre la grafica esta tapada, cuanto se espera a poder leer la vela cerrada
+            // (menos de una vela: despues ya no se sabria cual era).
+            graceMs: untilClose ? Math.max(SCORE_MAX_WAIT_MS, Math.min(30000, candle.seconds * 800)) : 0,
             info: {
               dir,
               trend: trend.trend,
@@ -541,6 +701,8 @@ function createTimedTracker() {
               confidence,
               readings: rules.readings,
               source: useAi ? 'ia' : 'reglas',
+              braked, // el freno para la IA cambio o bajo esta senal
+              untilClose,
             },
           };
         }
@@ -558,10 +720,14 @@ function createTimedTracker() {
       let remainingMs = 0;
       if (pending) {
         phase = 'signal';
-        remainingMs = Math.max(0, cycleMs + pending.entryMs - (now - pending.time));
+        if (pending.untilClose) remainingMs = pending.dueAt || !clockKnown ? 0 : candle.remainingMs; // hasta el cierre de la vela
+        else remainingMs = Math.max(0, pending.spanMs + pending.entryMs - (now - pending.time));
       } else if (watching) {
         phase = 'analysis';
         remainingMs = Math.max(0, pauseMs - (now - watching.time));
+      } else if (waiting) {
+        phase = 'waiting'; // esperando a que abra la vela siguiente
+        remainingMs = clockKnown ? candle.remainingMs : 0;
       }
 
       return {
@@ -571,6 +737,27 @@ function createTimedTracker() {
         candles: candles.length,
         lastResult,
         remainingMs,
+        untilClose: Boolean(pending && pending.untilClose), // la senal en curso se califica al cierre de la vela
+        // Entrada sugerida de la senal en curso: fila de la linea (null si no se puede ubicar ahora),
+        // si es en la orilla o a media zona, y si el precio ya llego (entrada tomada).
+        entry:
+          pending && pending.entry
+            ? (() => {
+                const best = pending.entry.best ? rowOfMark(pending.entry.best, priceY, completed, quote) : null;
+                const limit = pending.entry.limit ? rowOfMark(pending.entry.limit, priceY, completed, quote) : null;
+                const zone = best !== null && limit !== null ? { best, limit } : null;
+                return {
+                  row: rowOfMark(pending.entry.mark, priceY, completed, quote), // linea de referencia: donde se entro
+                  kind: pending.entry.kind,
+                  text: pending.entry.text,
+                  filled: pending.entry.filled,
+                  zone, // filas de las dos lineas: mejor precio (orilla) y limite
+                  // El precio de este instante sigue entre las dos lineas.
+                  inZone: zone && priceY !== null ? priceY >= Math.min(best, limit) - 0.5 && priceY <= Math.max(best, limit) + 0.5 : null,
+                };
+              })()
+            : null,
+        clockKnown, // se sabe cuanto le falta a la vela (para la cuenta regresiva)
         ready: status === 'ok' && !pending && !watching && !armed, // se puede pulsar PREDECIR
         moves, // movimientos por tramos y lecturas finas (para quien opine sobre la proxima senal)
         ticks: recentTicks,
@@ -601,8 +788,9 @@ function createTimedTracker() {
       watching = null;
       observed = false;
       armed = false;
+      waiting = null;
     },
   };
 }
 
-module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum };
+module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum, EARLY_CANDLE_MS, PRICE_LOST_MS, NO_SIGNAL_MS, AI_STREAK_BRAKE };

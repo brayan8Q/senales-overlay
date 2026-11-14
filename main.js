@@ -32,8 +32,23 @@ const { MIN_CANDLES } = require('./src/signal');
 const { describeChart } = require('./src/ai');
 const { PROVIDERS } = require('./src/providers');
 const { combine, nickname, scoreVotes, rememberOutcome, feedbackFor, PROVIDER_ORDER } = require('./src/council');
+const { niveles, VENTANA: LEVEL_CANDLES } = require('./src/levels');
+const { createCandleClock } = require('./src/candleclock');
 
+// PREDECIR con la vela ya avanzada: true = esperar a que abra la vela siguiente y analizar ahi;
+// false = analizar y predecir al momento de pulsar. El usuario pidio quitar la espera (13 nov 2026).
+// En los dos casos la senal vale hasta el cierre de la vela en curso cuando sale.
+const WAIT_FOR_NEXT_CANDLE = false;
+// Plazos largos (1 minuto o mas, p. ej. 5 min con velas de 1 min): la senal dura EXACTAMENTE los
+// segundos puestos en "Cada senal vale", contados desde que sale, igual que el temporizador de la
+// plataforma. Por debajo de eso (operaciones de segundos) vale hasta el cierre de la vela en curso.
+const LONG_SIGNAL_SECONDS = 60;
+// Desde el 13 nov (tarde) el usuario opera a segundos exactos (3 s): la senal dura lo que diga
+// "Cada senal vale", contado desde que sale, tambien en plazos cortos. Calificar al cierre de la
+// vela queda como opcion (config.untilClose = true en config.json), apagada por defecto.
+const closeMode = () => Boolean(config.untilClose) && config.manual && config.cycleSeconds < LONG_SIGNAL_SECONDS;
 const FEW_CANDLES = 8; // con menos velas a la vista se avisa (sigue funcionando)
+const MISSING_READS_TO_WARN = 2; // lecturas seguidas sin ver la vela en curso antes de avisar (el marcador se oculta desde la primera)
 const SCAN_INTERVAL_MS = 300; // cada cuanto se lee la pantalla (velas y linea de precio)
 const AI_MIN_PAUSE_SECONDS = 3; // la IA necesita al menos este tiempo para contestar
 const AI_LEAD_MS = 2500; // modo automatico: la consulta sale este tiempo antes de que termine la senal
@@ -80,6 +95,15 @@ let instantScore = null;
 const history = createHistory();
 let panel = null;
 let longCandles = []; // historial + vela en curso, de la ultima lectura buena
+// Soporte y resistencia (ver src/levels.js): historial propio de 80 velas cerradas, para no
+// cambiar con cuantas velas se calculan las demas lecturas. Lo que aqui se guarda es lo que se
+// dibuja sobre la grafica y, tal cual, lo que se manda a las IA.
+const levelHistory = createHistory({ maxCandles: LEVEL_CANDLES });
+let levels = null; // { estado, soporte, resistencia, tipica } de la ultima lectura buena
+// Reloj de la vela en curso (ver src/candleclock.js): cuanto lleva y cuanto le falta.
+const liveClock = createCandleClock();
+let clockInfo = null;
+let missingReads = 0; // lecturas seguidas en las que la vela en curso no esta a la vista
 // ---------- Registro en disco ----------
 // Guarda el precio real leido (cuando el eje esta a la vista) y cada senal con su resultado, en
 // %APPDATA%\senales-overlay\registro\AAAA-MM-DD.csv. Sirve para simular con datos de verdad:
@@ -109,14 +133,22 @@ function flushRecord() {
 let autoShots = []; // instantes (ms) en los que toca guardar una
 let lastSignalAt = 0; // cuando aparecio la ultima senal (para estimar el retraso de entrada)
 let entrySamples = []; // ultimos retrasos de entrada medidos (ms)
-const entryMs = () => Math.max(0, Math.min(ENTRY_MAX_MS, config.entryDelayMs || 0));
+// Con el boton PREDECIR la senal vale hasta el cierre de la vela y se mide contra el precio del
+// momento de la senal: ahi el retraso de entrada no interviene.
+const entryMs = () => (config.manual ? 0 : Math.max(0, Math.min(ENTRY_MAX_MS, config.entryDelayMs || 0)));
 // Escaner sobre la grafica: mientras se ve, la ventana se oculta a las capturas de pantalla para
 // que el haz no se cuele en la lectura de las velas.
 let scanUntil = 0;
 let scanProtected = false;
 let scanEndedAt = 0;
 // Se escanea durante el analisis y durante la senal (ahi se sigue la vela actual y la entrada).
-const scanningNow = () => config.cycleSeconds > 0 && (last.phase === 'analysis' || last.phase === 'signal' || Date.now() < scanUntil);
+// Mientras se espera a que abra la vela siguiente no hay haz: todavia no se analiza nada.
+const scanningNow = () =>
+  config.cycleSeconds > 0 && (last.phase === 'analysis' || last.phase === 'signal' || (Date.now() < scanUntil && last.phase !== 'waiting'));
+// El marcador de la vela actual y los niveles se dibujan SIEMPRE que el panel esta leyendo (no
+// solo al analizar). Mientras haya algo dibujado sobre la grafica, la ventana se oculta a las
+// capturas de pantalla: si no, el panel leeria sus propios trazos como si fueran velas.
+const followingNow = () => config.cycleSeconds > 0 && auto && Boolean(config.region);
 let entry = null; // senal en curso: { at, price, taken }
 let candleStartedAt = 0; // cuando empezo la vela en curso
 function protectForScan(on) {
@@ -124,7 +156,7 @@ function protectForScan(on) {
   scanProtected = on;
 }
 function updateScanProtection(now) {
-  if (scanningNow()) {
+  if (scanningNow() || followingNow()) {
     scanEndedAt = 0;
     if (!scanProtected) protectForScan(true);
   } else if (scanProtected) {
@@ -133,6 +165,107 @@ function updateScanProtection(now) {
     else if (now - scanEndedAt >= 700) protectForScan(false);
   }
 }
+// ---------- Porcentaje de confianza: acierto MEDIDO por nivel ----------
+// El panel califica cada senal como confianza alta, media o baja. Esa palabra no es un
+// porcentaje: el porcentaje que se muestra es cuantas senales de ese mismo nivel acertaron de
+// verdad (segun el registro de los ultimos dias y lo que se va midiendo). No es una promesa.
+const CONFIDENCE_DAYS = 7; // dias de registro que cuentan
+const confidenceStats = {}; // { alta: { wins, losses }, media: {...}, baja: {...} }
+let openSignal = null; // senal en curso: { dir, confidence }
+function countConfidence(level, result) {
+  if (!level || level === 'ninguna') return;
+  const hit = /^acert/.test(result);
+  if (!hit && !/^fall/.test(result)) return; // empates y "sin medir" no cuentan
+  const cell = (confidenceStats[level] = confidenceStats[level] || { wins: 0, losses: 0 });
+  if (hit) cell.wins++;
+  else cell.losses++;
+}
+/** Al abrir: lee del registro las senales ya calificadas (S seguida de su R). */
+function loadConfidenceStats() {
+  for (const level of Object.keys(confidenceStats)) delete confidenceStats[level];
+  try {
+    const dir = path.join(app.getPath('userData'), 'registro');
+    const files = fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}\.csv$/.test(f)).sort().slice(-CONFIDENCE_DAYS);
+    for (const file of files) {
+      let signal = null;
+      for (const line of fs.readFileSync(path.join(dir, file), 'utf8').split(/\r?\n/)) {
+        const cols = line.split(',');
+        if (cols[0] === 'S') signal = cols;
+        else if (cols[0] === 'R' && signal) {
+          // Solo las senales del MISMO plazo que el de ahora: una de 5 segundos no dice nada de una de 5 minutos.
+          if (signal[2] !== 'wait' && Number(signal[5]) === config.cycleSeconds) countConfidence(signal[4], cols[2] || '');
+          signal = null;
+        }
+      }
+    }
+  } catch {
+    /* sin registro todavia */
+  }
+}
+/** Acierto medido del nivel de confianza de una senal: { level, wins, total, rate } (rate null sin datos). */
+function confidenceOf(signal) {
+  if (!signal || !signal.dir || !signal.confidence) return null;
+  const cell = confidenceStats[signal.confidence] || { wins: 0, losses: 0 };
+  const total = cell.wins + cell.losses;
+  return { level: signal.confidence, wins: cell.wins, total, rate: total ? Math.round((100 * cell.wins) / total) : null };
+}
+
+// ---------- Foto real de la pantalla CON el panel ----------
+// Mientras el panel lee, su ventana esta oculta a las capturas de pantalla (para no leerse a si
+// mismo), asi que ninguna herramienta de capturas lo ve. Para tener una foto de verdad se hace
+// aqui: se detiene la lectura un instante, la ventana se deja ver, se captura la pantalla tal
+// como esta y se vuelve a ocultar. Queda en la carpeta "capturas" como HHMMSS_pantalla.png.
+// Se pide con el boton "Guardar captura" o creando el archivo capturas/pedir_foto.
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+let photoBusy = false;
+async function saveScreenPhoto() {
+  if (photoBusy || !win || win.isDestroyed()) return null;
+  photoBusy = true;
+  const wasProtected = scanProtected;
+  try {
+    for (let i = 0; i < 60 && busy; i++) await sleep(25); // deja terminar la lectura en curso
+    busy = true; // sin lecturas mientras el panel se deja ver
+    win.setContentProtection(false);
+    await sleep(350);
+    const shot = await captureScreen();
+    const dir = path.join(__dirname, 'capturas');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${new Date().toTimeString().slice(0, 8).replace(/:/g, '')}_pantalla.png`);
+    fs.writeFileSync(file, shot.image.toPNG());
+    return file;
+  } catch {
+    return null;
+  } finally {
+    if (win && !win.isDestroyed()) win.setContentProtection(wasProtected);
+    await sleep(250); // que vuelva a quedar oculto antes de la siguiente lectura
+    busy = false;
+    photoBusy = false;
+  }
+}
+// capturas/pedir_foto_senal: la foto se toma sola en cuanto salga la proxima senal con lado
+// (para ver la zona de entrada dibujada; una senal dura pocos segundos).
+let photoOnSignal = false;
+/** Si alguien dejo el archivo capturas/pedir_foto, se toma la foto y se borra la peticion. */
+function checkPhotoRequest() {
+  const onSignal = path.join(__dirname, 'capturas', 'pedir_foto_senal');
+  try {
+    if (fs.existsSync(onSignal)) {
+      fs.unlinkSync(onSignal);
+      photoOnSignal = true;
+    }
+  } catch {
+    /* no es critico */
+  }
+  const request = path.join(__dirname, 'capturas', 'pedir_foto');
+  try {
+    if (!fs.existsSync(request)) return;
+    fs.unlinkSync(request);
+  } catch {
+    return;
+  }
+  saveScreenPhoto();
+}
+
 function saveAutoShot(image, badges) {
   try {
     const dir = path.join(app.getPath('userData'), 'capturas-auto');
@@ -148,7 +281,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-12 lectura con operacion abierta + freno de movimiento agotado + NO ENTRAR en confianza baja';
+const BUILD = '2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -317,6 +450,45 @@ async function askOne(id, snapshot, timeoutMs, requestId) {
 }
 
 /**
+ * Soporte y resistencia para las IA: EXACTAMENTE los que se dibujan sobre la grafica (`levels`).
+ * Sustituyen a los dos datos de nivel de las lecturas; lo demas de las lecturas no cambia.
+ */
+function levelForAi(level, price) {
+  if (!level || !levels || !(levels.tipica > 0) || price === null) return null;
+  const gap = Math.abs(level.precio - price);
+  const round1 = (v) => Math.round(v * 10) / 10;
+  return {
+    distancia: round1(gap / levels.tipica), // en "velas": 1 = tamano de una vela tipica
+    toques: level.toques,
+    estado: level.invertido ? 'invertido' : 'vigente',
+    ...(axis ? { distancia_pips: round1((gap * axis.perPixel) / axis.pip) } : {}),
+  };
+}
+function readingsForAi(readings, price) {
+  if (!readings) return null;
+  return {
+    ...readings,
+    soporte_abajo: levels ? levelForAi(levels.soporte, price) : null,
+    resistencia_arriba: levels ? levelForAi(levels.resistencia, price) : null,
+    niveles_explicacion:
+      'soporte y resistencia mas cercanos, medidos con pivotes de las ultimas 80 velas (son las dos lineas que el panel dibuja). ' +
+      'vigente = el precio no lo ha cruzado desde su ultimo toque; invertido = lo cruzo una vez y ahora hace el papel contrario ' +
+      '(soporte roto que hace de resistencia, o al reves). null = no hay nivel confirmado de ese lado',
+  };
+}
+
+/**
+ * Segundos que se pide predecir. Con el boton PREDECIR la senal vale hasta el CIERRE de la vela
+ * en curso: lo que le faltara a la vela cuando salga la senal (tras la pausa de analisis). En
+ * automatico, o si aun no se sabe cuanto dura la vela, los segundos de siempre.
+ */
+function horizonSeconds() {
+  if (!closeMode() || !clockInfo || !clockInfo.known) return config.cycleSeconds;
+  const pauseMs = instantMode() ? 0 : config.pauseSeconds * 1000;
+  return Math.max(1, Math.round((clockInfo.remainingMs - pauseMs) / 1000));
+}
+
+/**
  * Pide su opinion a todas las IA activas a la vez, con los mismos numeros.
  * @param {number} windowMs  Tiempo que falta para dar la senal: es lo que tienen para contestar.
  */
@@ -330,7 +502,7 @@ function askCouncil(candles, moves, ticks, windowMs, readings = null) {
   }
   const requestId = ++council.requestId;
   council.deadlineAt = Date.now() + windowMs - 400;
-  const snapshot = describeChart(candles, moves, config.cycleSeconds, {
+  const snapshot = describeChart(candles, moves, horizonSeconds(), {
     asset: config.asset,
     ticks,
     readings,
@@ -345,6 +517,13 @@ function askCouncil(candles, moves, ticks, windowMs, readings = null) {
         ? { elapsed: Math.round((Date.now() - candleStartedAt) / 100) / 10, seconds: memoryInfo.candleSeconds }
         : null,
   });
+  // Con el boton PREDECIR la senal vale hasta el cierre de la vela en curso: se les dice tal cual.
+  const toClose = closeMode() && Boolean(clockInfo && clockInfo.known);
+  if (toClose) {
+    snapshot.objetivo =
+      'la operacion vale hasta el CIERRE de la vela en curso (le faltan los segundos indicados en "segundos_a_predecir"): ' +
+      'di si la vela cerrara por encima (up) o por debajo (down) del precio del momento de tu respuesta';
+  }
   // A cada IA se le agregan SUS predicciones anteriores en esta grafica y lo que paso despues:
   // no recuerdan nada entre consultas, asi que es la unica forma de que puedan corregirse.
   for (const id of ids) {
@@ -358,7 +537,9 @@ function askCouncil(candles, moves, ticks, windowMs, readings = null) {
         segundos: Math.round((ais[id].lastMs + entryMs()) / 100) / 10,
         explicacion:
           'lo que tardaste en responder la ultima vez, mas lo que tarda la persona en poner la orden. La operacion se abre entonces: predice donde estara el precio ' +
-          `${config.cycleSeconds} segundos DESPUES de ese momento, respecto al precio de ese momento (no respecto al de estos datos)`,
+          (toClose
+            ? 'AL CIERRE de la vela en curso, respecto al precio de ese momento (no respecto al de estos datos)'
+            : `${config.cycleSeconds} segundos DESPUES de ese momento, respecto al precio de ese momento (no respecto al de estos datos)`),
       };
     }
     askOne(id, personal, windowMs - 400, requestId);
@@ -392,6 +573,7 @@ function loadConfig() {
     if (typeof saved.alwaysSignal === 'boolean') config.alwaysSignal = saved.alwaysSignal;
     if (typeof saved.manual === 'boolean') config.manual = saved.manual;
     if (typeof saved.instant === 'boolean') config.instant = saved.instant;
+    if (typeof saved.untilClose === 'boolean') config.untilClose = saved.untilClose;
     if (Number.isFinite(saved.entryDelayMs)) config.entryDelayMs = Math.max(0, Math.min(ENTRY_MAX_MS, saved.entryDelayMs));
     if (typeof saved.asset === 'string') config.asset = saved.asset;
   } catch {
@@ -431,6 +613,10 @@ function statusText() {
   if (!config.region) return 'Marca la zona de la gráfica';
   if (!auto) return 'Escáner en pausa';
   if (last.status === 'no-chart') return 'No veo velas verdes y rojas en la zona';
+  // La vela en curso no se ve (algo la tapa, o la grafica esta movida hacia atras): no se marca una vieja.
+  if (config.cycleSeconds > 0 && missingReads >= MISSING_READS_TO_WARN && last.status !== 'no-price') {
+    return 'La vela actual no está a la vista (algo la tapa o la gráfica está movida hacia atrás)';
+  }
   if (last.status === 'covered' && coverReason) return coverReason;
   if (last.candles < MIN_CANDLES + 1) return `Veo ${last.candles} velas: aleja el zoom, necesito al menos ${MIN_CANDLES + 1}`;
   if (last.status === 'no-price') return 'No encuentro la línea del precio actual dentro de la zona';
@@ -458,6 +644,10 @@ function publish(statusOverride) {
     phase: last.phase || 'idle',
     status: statusOverride || statusText(),
     signal: last.signal,
+    // Porcentaje de confianza de la senal en curso: acierto medido de las senales de su mismo nivel.
+    confidence: confidenceOf(last.signal),
+    // Entrada sugerida de la senal en curso: donde esperar el precio y si ya llego.
+    entry: last.entry ? { kind: last.entry.text, filled: last.entry.filled, zone: Boolean(last.entry.zone), inZone: last.entry.inZone } : null,
     readings: last.readings || null, // lecturas en vivo (tendencia, vela actual, precio)
     // Las 8 lecturas del panel (sin los datos internos) y cuantas velas hay en el historial.
     panel:
@@ -467,8 +657,14 @@ function publish(statusOverride) {
     historyCandles: panel ? panel.candles : 0,
     price: config.cycleSeconds > 0 ? priceText : null, // precio actual leido del eje (null si no se ve el eje)
     pips: Boolean(axis), // las distancias salen en pips
-    scanning: scanningNow(), // se esta escaneando la grafica
-    scan: scanningNow() ? scanInfo : null, // lo que se dibuja durante el escaneo
+    scanning: scanningNow(), // se esta escaneando la grafica (haz y recuadro de cada vela)
+    // Lo que se dibuja sobre la grafica. El marcador de la vela actual y los niveles van siempre
+    // que el panel esta leyendo; el haz y los recuadros, solo durante el analisis.
+    scan: scanningNow() || followingNow() ? scanInfo : null,
+    // PREDECIR alineado con la vela: se espera a que abra la siguiente y la senal vale hasta su cierre.
+    untilClose: Boolean(last.untilClose),
+    clockKnown: Boolean(clockInfo && clockInfo.known),
+    candleSeconds: clockInfo ? clockInfo.seconds : 0,
     entryDelay: Math.round(entryMs() / 100) / 10, // segundos que tarda el usuario en entrar tras la senal
     // Patron medido en el precio real de esta grafica, al plazo de la senal.
     regime: regime && config.cycleSeconds > 0 ? { kind: regime.kind, text: regime.text } : null,
@@ -531,7 +727,9 @@ async function scanTick() {
       record(`B,${Date.now()},${trades.last},${trades.wins},${trades.losses},${trades.ties || 0}`);
       // El globo sale al cerrar la operacion: senal + lo que tardo en entrar + duracion.
       const sample = Date.now() - lastSignalAt - config.cycleSeconds * 1000 - BADGE_LAG_MS;
-      if (lastSignalAt && sample > -700 && sample < ENTRY_MAX_MS + 2000) {
+      // (Con el boton PREDECIR la senal vale hasta el cierre de la vela, no un numero fijo de
+      // segundos: de ahi no se puede estimar el retraso de entrada, y tampoco hace falta.)
+      if (!config.manual && lastSignalAt && sample > -700 && sample < ENTRY_MAX_MS + 2000) {
         entrySamples = [...entrySamples, Math.max(0, sample)].slice(-12);
         if (entrySamples.length >= 3) {
           const sorted = [...entrySamples].sort((a, b) => a - b);
@@ -585,8 +783,10 @@ async function scanTick() {
       if (formingOk) goodCandles = { time: now, candles };
       const usable = formingOk || !goodCandles || now - goodCandles.time > GOOD_CANDLES_MS ? candles : goodCandles.candles;
 
+      let closedDetected = false; // en esta lectura (verificada) se vio cerrar una vela
       if (formingOk) {
         const hist = history.update(candles, priceY, now, trackMemoryMs());
+        closedDetected = hist.added.length > 0;
         // Memoria del mercado: se guarda cada vela que acaba de cerrar y se consulta que paso
         // las otras veces que la grafica estuvo en una situacion como la de ahora.
         if (marketMemory) {
@@ -630,7 +830,14 @@ async function scanTick() {
           trendCandles: longTrade() ? 20 : 12,
         });
         longCandles = forming && hist.candles.length ? [...hist.candles, forming] : candles;
+        // Soporte y resistencia: ultimas 80 velas cerradas + la vela en curso + el precio de ahora.
+        // Lo que sale de aqui es lo que se dibuja y lo que se les manda a las IA.
+        const levelHist = levelHistory.update(candles, priceY, now, 1000);
+        levels = forming ? niveles([...levelHist.candles, forming], priceY !== null ? -priceY : forming.close) : null;
       }
+      // Reloj de la vela en curso: se pone en hora al ver cerrar una vela; si a la hora del cierre
+      // la grafica estaba tapada, el cierre lo da el reloj.
+      clockInfo = liveClock.update({ now, closed: closedDetected, seconds: memoryInfo && memoryInfo.candleSeconds ? memoryInfo.candleSeconds : 0 });
       const advice = councilAdvice(now);
       last = byTime.update({
         candles: usable,
@@ -651,6 +858,17 @@ async function scanTick() {
         force: config.alwaysSignal,
         manual: config.manual,
         waitForAdvice: anyAi() && anyAiBusy() && !instantMode(),
+        // Con el boton PREDECIR la senal vale hasta el cierre de la vela (y, si WAIT_FOR_NEXT_CANDLE,
+        // con la vela avanzada se espera a que abra la siguiente).
+        align: closeMode(),
+        waitNext: WAIT_FOR_NEXT_CANDLE,
+        // Entrada sugerida: linea en la orilla o a media zona; la senal se mide desde que el precio llega.
+        suggest: config.manual,
+        candle: {
+          ...clockInfo,
+          // Fila del cierre de la ultima vela cerrada, solo si esta lectura es de fiar.
+          closeRow: formingOk && candles.length >= 2 ? -candles[candles.length - 2].close : null,
+        },
       });
       // Comparacion: la misma pulsacion, pero con la senal de las reglas dada AL INSTANTE
       // (sin esperar a la IA). No se muestra como senal; solo se mide, para saber que conviene.
@@ -694,19 +912,28 @@ async function scanTick() {
         // pase por su cierre (eso solo le pasa a la vela en curso de verdad). No espera a que las
         // velas cerradas esten verificadas: si no, el marcador se quedaba atras en cada cierre.
         const liveCurrent = priceY !== null && check.forming && candles.length >= 3;
-        const current = (liveCurrent ? candles[candles.length - 1] : usable[usable.length - 1]) || null;
+        // Solo se marca la vela EN CURSO de verdad, la de esta lectura. Si no esta a la vista
+        // (grafica movida hacia atras, o algo la tapa) no se marca una vela vieja: el marcador se
+        // oculta y se avisa.
+        const current = liveCurrent ? candles[candles.length - 1] : null;
+        missingReads = liveCurrent || candles.length < 3 ? 0 : missingReads + 1;
         const inPips = (px) => (axis ? Math.round((10 * Math.abs(px) * axis.perPixel) / axis.pip) / 10 : null);
         const top = current ? Math.max(current.open, current.close) : 0;
         const bottom = current ? Math.min(current.open, current.close) : 0;
         const dirSign = last.signal && last.signal.dir === 'down' ? -1 : 1;
-        const seconds = memoryInfo && memoryInfo.candleSeconds ? memoryInfo.candleSeconds : 0;
+        // Soporte y resistencia de src/levels.js: fila en pantalla, toques y si esta invertido.
+        const levelMark = (level) => (level ? { row: o - level.precio / k, touches: level.toques, flipped: level.invertido } : null);
         scanInfo = {
-          mode: last.phase === 'signal' ? 'signal' : 'analysis',
+          // 'analysis' = haz y recuadro de cada vela; 'signal' = senal en curso; 'follow' = solo se
+          // sigue la vela actual (en reposo, o esperando a que abra la vela siguiente).
+          mode: last.phase === 'signal' ? 'signal' : scanningNow() ? 'analysis' : 'follow',
           verified,
           rate: readsPerSecond(now), // lecturas de pantalla por segundo en este momento
           candles: usable.map((c) => ({ x: o + c.x0 / k, w: (c.x1 - c.x0 + 1) / k, y: o - c.high / k, h: (c.high - c.low) / k, up: c.dir === 'up' })),
-          support: panel && panel.rows.support !== null ? o + panel.rows.support / k : null,
-          resistance: panel && panel.rows.resistance !== null ? o + panel.rows.resistance / k : null,
+          support: levels ? levelMark(levels.soporte) : null,
+          resistance: levels ? levelMark(levels.resistencia) : null,
+          // La vela en curso no esta a la vista (se avisa a partir de la segunda lectura seguida).
+          missing: missingReads >= MISSING_READS_TO_WARN,
           saved: memoryInfo ? memoryInfo.total : 0, // velas guardadas en la memoria del mercado
           // La vela actual, al detalle: cuerpo, mechas, apertura y precio.
           current: current
@@ -720,7 +947,6 @@ async function scanTick() {
                 open: o - current.open / k,
                 price: o + (priceY === null ? -current.close : priceY) / k,
                 up: current.dir === 'up',
-                covered: !liveCurrent, // algo la tapa: se muestra la ultima lectura buena
                 bodyPips: inPips(top - bottom),
                 upperPips: inPips(current.high - top),
                 lowerPips: inPips(bottom - current.low),
@@ -729,8 +955,10 @@ async function scanTick() {
                 moving: last.readings ? last.readings.price.text : '',
                 lean: last.readings ? last.readings.price.lean : 'flat',
                 quote: priceText,
-                elapsed: candleStartedAt ? Math.round((now - candleStartedAt) / 100) / 10 : null, // segundos que lleva esta vela
-                seconds, // cuanto dura cada vela (0 = aun no se sabe)
+                // Reloj de la vela (src/candleclock.js): segundos que lleva, cuanto dura y cuanto le falta.
+                elapsed: clockInfo && clockInfo.elapsedMs !== null ? Math.round(clockInfo.elapsedMs / 100) / 10 : null,
+                seconds: clockInfo ? clockInfo.seconds : 0, // 0 = aun no se sabe cuanto dura
+                remaining: clockInfo && clockInfo.known ? Math.round(clockInfo.remainingMs / 100) / 10 : null,
               }
             : null,
           // Senal en curso: linea en el precio de entrada y como va en este instante.
@@ -738,7 +966,38 @@ async function scanTick() {
           // instante. Cuando llega el momento de entrada del usuario se pasa a ese precio y
           // empieza a decir cuantos pips va ganando o perdiendo.
           entry: (() => {
-            if (!entry || !last.signal || !last.signal.dir) return null;
+            if (!last.signal || !last.signal.dir) return null;
+            // Entrada sugerida (src/entry.js): la linea va en la orilla o a media zona; punteada
+            // mientras el precio no llega, y firme desde que llega ("entrada tomada").
+            const plan = last.entry;
+            if (plan) {
+              if (plan.row === null) return null; // en esta lectura no se puede ubicar la linea
+              const withQuote = Boolean(axis) && axis.anchored && price !== null;
+              const base = withQuote ? axis.at(plan.row) : null;
+              return {
+                dir: last.signal.dir,
+                confidence: last.signal.confidence,
+                suggested: true,
+                kind: plan.text, // 'orilla alta' | 'orilla baja'
+                // Zona de entrada: las dos lineas entre las que esta bien entrar, y si el precio sigue dentro.
+                zone: plan.zone
+                  ? {
+                      best: o + plan.zone.best / k,
+                      limit: o + plan.zone.limit / k,
+                      inside: plan.inZone,
+                      bestQuote: withQuote ? axis.at(plan.zone.best).toFixed(axis.decimals) : null,
+                      limitQuote: withQuote ? axis.at(plan.zone.limit).toFixed(axis.decimals) : null,
+                    }
+                  : null,
+                taken: plan.filled,
+                row: o + plan.row / k,
+                quote: withQuote ? base.toFixed(axis.decimals) : null,
+                pips: withQuote && plan.filled ? Math.round((10 * dirSign * (price - base)) / axis.pip) / 10 : null, // + ganando, - perdiendo
+                // Sin el eje no hay pips: se dice al menos si va a favor o en contra de la entrada.
+                ahead: plan.filled && priceY !== null ? Math.sign((plan.row - priceY) * dirSign) : 0,
+              };
+            }
+            if (!entry) return null;
             const base = entry.taken ? entry.price : entry.signalPrice;
             const withQuote = base !== null && Boolean(axis) && axis.anchored && price !== null;
             // Sin el eje a la vista no hay cotizacion: la linea se queda en la fila del precio de la senal.
@@ -758,12 +1017,36 @@ async function scanTick() {
       // Registro: cada senal que se da y como termino.
       if (last.phase === 'signal' && previousPhase !== 'signal' && last.signal) {
         lastSignalAt = now;
-        record(`S,${now},${last.signal.dir || 'wait'},${last.signal.source},${last.signal.confidence},${config.cycleSeconds},${regime && regime.kind ? regime.kind : ''}`);
+        // Ultimo campo: "cierre:N" = la senal vale hasta el cierre de la vela (le faltaban N s).
+        const until = last.untilClose ? `cierre:${Math.round((last.remainingMs || 0) / 100) / 10}` : '';
+        record(`S,${now},${last.signal.dir || 'wait'},${last.signal.source},${last.signal.confidence},${config.cycleSeconds},${regime && regime.kind ? regime.kind : ''},${until}`);
+        openSignal = { dir: last.signal.dir, confidence: last.signal.confidence, filled: false };
+        if (last.entry) record(`E,${now},zona-entrada,${last.entry.text}`);
+        if (photoOnSignal && last.signal.dir) {
+          photoOnSignal = false;
+          setTimeout(saveScreenPhoto, 900); // con la senal y su zona ya dibujadas
+        }
       } else if (previousPhase === 'signal' && last.phase !== 'signal' && last.lastResult) {
         record(`R,${now},${last.lastResult.replace(/,/g, ' ')}`);
+        // Acierto medido por nivel de confianza (solo senales con lado).
+        if (openSignal && openSignal.dir) countConfidence(openSignal.confidence, last.lastResult);
+        openSignal = null;
         // Justo ahora la plataforma dibuja el globo del resultado: se guardan dos imagenes de la
         // zona para poder revisar despues por que un globo se conto o no.
         autoShots = [now + 600, now + 2200];
+      }
+      // Registro: el precio llego a la linea de entrada sugerida.
+      if (last.phase === 'signal' && last.entry && last.entry.filled && openSignal && !openSignal.filled) {
+        openSignal.filled = true;
+        if (last.entry.kind !== 'zona') record(`E,${now},entro,${last.entry.text}`);
+      }
+      // Registro de la espera de PREDECIR: E,ms,espera-vela,segundos que faltan | E,ms,analisis | E,ms,cancelada
+      if (last.phase === 'waiting' && previousPhase !== 'waiting') {
+        record(`E,${now},espera-vela,${clockInfo && clockInfo.known ? Math.round(clockInfo.remainingMs / 100) / 10 : ''}`);
+      } else if (previousPhase === 'waiting' && last.phase === 'idle') {
+        record(`E,${now},cancelada`);
+      } else if (last.phase === 'analysis' && previousPhase !== 'analysis') {
+        record(`E,${now},analisis,${clockInfo && clockInfo.elapsedMs !== null ? Math.round(clockInfo.elapsedMs / 100) / 10 : ''}`);
       }
       // Marcador de cada IA: al terminar la senal se sabe hacia donde fue el precio de verdad.
       if (previousPhase === 'signal' && last.phase !== 'signal' && council.voted && council.votedDir) {
@@ -777,6 +1060,29 @@ async function scanTick() {
       // Empieza una senal: se anota lo que dijo cada IA (para su marcador). Las respuestas ya
       // usadas, o una consulta que no llego a tiempo, dejan de servir.
       if (last.phase === 'signal' && previousPhase !== 'signal') {
+        // Registro para poder revisar despues POR QUE salio cada senal (no cambia nada de la senal):
+        //   A,ms,ia,lado,confianza,razon     lo que dijo cada IA
+        //   M,ms,razon                        el motivo final que mostro el panel
+        //   C,ms,cuerpo,rango,racha,color     la vela en curso al salir la senal: cuerpo y rango en
+        //                                     velas tipicas, y cuantas velas cerradas seguidas del mismo color
+        const plain = (text) => String(text || '').replace(/[,\r\n]+/g, ' ').slice(0, 200);
+        for (const [id, answer] of Object.entries(council.answers)) {
+          record(`A,${now},${id},${answer.dir || 'wait'},${answer.confidence || ''},${plain(answer.reason)}`);
+        }
+        if (last.signal) record(`M,${now},${plain(last.signal.reason)}`);
+        {
+          const closed = usable.slice(0, -1);
+          const live = usable[usable.length - 1];
+          const ranges = closed.slice(-20).map((c) => c.high - c.low).sort((a, b) => a - b);
+          const unit = ranges[Math.floor((ranges.length - 1) / 2)] || 0;
+          if (live && unit > 0) {
+            const color = closed.length ? closed[closed.length - 1].dir : 'flat';
+            let streak = 0;
+            for (let i = closed.length - 1; i >= 0 && color !== 'flat' && closed[i].dir === color; i--) streak++;
+            const one = (v) => Math.round((10 * v) / unit) / 10;
+            record(`C,${now},${one(Math.abs(live.close - live.open))},${one(live.high - live.low)},${streak},${live.dir}/${color}`);
+          }
+        }
         const votes = Object.entries(council.answers).map(([id, answer]) => [id, answer.dir]);
         council.voted = votes.length ? Object.fromEntries(votes) : null;
         council.votedDir = last.signal ? last.signal.dir : null;
@@ -797,7 +1103,9 @@ async function scanTick() {
           let windowMs = last.remainingMs;
           if (last.phase === 'signal') windowMs += pauseMs;
           else if (config.manual) windowMs += AI_MANUAL_EXTRA_MS;
-          askCouncil(longCandles.length ? longCandles : usable, last.moves || [], last.ticks || [], windowMs, panel ? panel.data : null);
+          // Los niveles que reciben las IA son los mismos que estan dibujados (ver readingsForAi).
+          const priceNow = priceY !== null ? -priceY : forming ? forming.close : null;
+          askCouncil(longCandles.length ? longCandles : usable, last.moves || [], last.ticks || [], windowMs, panel ? readingsForAi(panel.data, priceNow) : null);
         }
       }
       previousPhase = last.phase;
@@ -811,8 +1119,9 @@ async function scanTick() {
   } finally {
     busy = false;
     // Mientras se escanea se lee la pantalla sin pausas (unas 5 veces por segundo), para que el
-    // seguimiento de la vela actual sea lo mas fino posible.
-    if (scanningNow() && auto && config.region) setTimeout(scanTick, 15);
+    // seguimiento de la vela actual sea lo mas fino posible. Tambien mientras se espera a que abra
+    // la vela siguiente: asi el analisis arranca en cuanto abre.
+    if ((scanningNow() || last.phase === 'waiting') && auto && config.region) setTimeout(scanTick, 15);
   }
 }
 
@@ -863,6 +1172,11 @@ ipcMain.on('set-region', (_e, rect) => {
   saveConfig();
   resetTrackers(); // otra zona = otra medicion
   history.reset(); // y otro historial de velas
+  levelHistory.reset();
+  levels = null;
+  liveClock.reset();
+  clockInfo = null;
+  missingReads = 0;
   quality.reset();
   stability.reset();
   scanInfo = null;
@@ -899,6 +1213,8 @@ ipcMain.on('set-cycle', (_e, value) => {
   if (seconds === config.cycleSeconds) return;
   config.cycleSeconds = seconds;
   saveConfig();
+  flushRecord();
+  loadConfidenceStats(); // el porcentaje de confianza es por plazo
   resetTrackers();
   publish('Cambió el tiempo: marcador en cero');
 });
@@ -1037,6 +1353,7 @@ ipcMain.on('save-debug', async () => {
     const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
     fs.writeFileSync(path.join(dir, `${stamp}_grafica.png`), image.toPNG());
     fs.writeFileSync(path.join(dir, `${stamp}_lectura.json`), JSON.stringify(reading, null, 1), 'utf8');
+    await saveScreenPhoto(); // y una foto de la pantalla completa, con el panel encima
     publish('Captura guardada en la carpeta "capturas"');
   } catch (err) {
     publish(`No se pudo guardar la captura: ${err.message}`);
@@ -1051,8 +1368,10 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.whenReady().then(() => {
     loadConfig();
+    loadConfidenceStats();
     createWindow();
     setInterval(scanTick, SCAN_INTERVAL_MS);
+    setInterval(checkPhotoRequest, 1000);
     setInterval(flushRecord, 5000);
     app.on('before-quit', flushRecord);
     record(`V,${Date.now()},${BUILD}`); // desde aqui, lo que se registre es de esta version

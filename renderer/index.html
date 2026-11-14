@@ -27,8 +27,11 @@
       <div id="scan-now" class="hidden"><b></b></div>
       <div id="scan-info" class="hidden"></div>
       <div id="scan-clock" class="hidden"><i></i></div>
+      <div id="scan-clock-text" class="hidden"></div>
       <!-- Señal en curso: precio de entrada y cómo va en este instante -->
       <div id="scan-target" class="hidden"></div>
+      <!-- Zona de entrada: dos líneas, y entre las dos está bien entrar -->
+      <div id="scan-zone" class="hidden"><b></b><i></i><u></u></div>
       <div id="scan-entry" class="hidden"><b></b></div>
       <div id="scan-label">ESCANEANDO VELAS</div>
     </div>
@@ -41,10 +44,11 @@
   </div>
 
   <!-- Panel flotante compacto -->
-  <div id="panel">
+  <div id="panel" class="compact">
     <div id="panel-header">
-      <span>Lector de tendencia</span>
+      <span>Lector</span>
       <span>
+        <button id="btn-details" title="Ver u ocultar el detalle: lecturas, patrón, memoria y marcadores">▾</button>
         <button id="btn-settings" title="Ajustes: zona, tiempos, pago y clave de la IA">⚙</button>
         <button id="btn-quit" title="Cerrar">✕</button>
       </span>
@@ -54,7 +58,10 @@
     <div id="signal" class="wait">
       <div id="signal-source"></div>
       <div id="signal-label">ESPERAR</div>
-      <div id="signal-detail"></div>
+      <div id="signal-pct" class="hidden" title="Porcentaje de confianza: de las señales de este mismo nivel (alta, media o baja) ya calificadas en los últimos 7 días, cuántas acertaron. Es lo medido, no una promesa."></div>
+      <div id="signal-pct-note" class="hidden"></div>
+      <div id="signal-entry" class="hidden" title="Entrada sugerida: en una venta conviene entrar más arriba y en una compra más abajo. La línea sobre la gráfica marca dónde; si el precio llega, la entrada se da por tomada y la señal se mide desde ese precio. Si no llega, no hay entrada."></div>
+      <div id="signal-detail" class="detail"></div>
     </div>
 
     <!-- Modo manual: la predicción se pide con este botón -->
@@ -67,10 +74,10 @@
     </div>
 
     <!-- Lecturas -->
-    <div id="readings-head" title="Calculadas con las velas leídas de la pantalla. El historial se acumula mientras el panel está abierto.">
+    <div id="readings-head" class="detail" title="Calculadas con las velas leídas de la pantalla. El historial se acumula mientras el panel está abierto.">
       <span id="readings-title">Lecturas · de la pantalla</span><span id="readings-count"></span>
     </div>
-    <div id="readings">
+    <div id="readings" class="detail">
       <div class="chip" id="chip-trend"><span class="chip-name">Tendencia</span><span class="chip-value">…</span><svg class="chip-spark" viewBox="0 0 60 12" preserveAspectRatio="none"><polyline points="" /></svg></div>
       <div class="chip" id="chip-ema"><span class="chip-name">EMA 50/200</span><span class="chip-value">…</span><svg class="chip-spark" viewBox="0 0 60 12" preserveAspectRatio="none"><polyline points="" /></svg></div>
       <div class="chip" id="chip-momentum"><span class="chip-name">Momentum</span><span class="chip-value">…</span><svg class="chip-spark" viewBox="0 0 60 12" preserveAspectRatio="none"><polyline points="" /></svg></div>
@@ -82,10 +89,10 @@
     </div>
 
     <!-- Patrón medido en el precio real: si a este plazo viene continuando o rebotando -->
-    <div id="regime" class="hidden" title="El panel corta el precio de los últimos minutos en tramos del mismo plazo que tu señal y cuenta cuántas veces el tramo siguiente fue hacia el mismo lado (continúa) o hacia el contrario (rebota). Si hay un patrón claro, la señal se orienta según él. Necesita unos 5 minutos de gráfica a la vista y describe solo los últimos minutos: puede cambiar."></div>
+    <div id="regime" class="hidden detail" title="El panel corta el precio de los últimos minutos en tramos del mismo plazo que tu señal y cuenta cuántas veces el tramo siguiente fue hacia el mismo lado (continúa) o hacia el contrario (rebota). Si hay un patrón claro, la señal se orienta según él. Necesita unos 5 minutos de gráfica a la vista y describe solo los últimos minutos: puede cambiar."></div>
 
     <!-- Memoria del mercado: qué pasó otras veces tras una racha de velas como la de ahora -->
-    <div id="memory" class="hidden" title="El panel guarda en disco cada vela que cierra de este activo (se acumula entre sesiones). Aquí dice qué pasó las otras veces que la gráfica estuvo como ahora: por ejemplo, tras 3 velas verdes seguidas, cuántas veces la siguiente fue roja. Vota en la señal solo con 12 casos o más y una diferencia clara; se le manda a las IA. Escribe el nombre del activo en ⚙ para que cada par tenga su propia memoria."></div>
+    <div id="memory" class="hidden detail" title="El panel guarda en disco cada vela que cierra de este activo (se acumula entre sesiones). Aquí dice qué pasó las otras veces que la gráfica estuvo como ahora: por ejemplo, tras 3 velas verdes seguidas, cuántas veces la siguiente fue roja. Vota en la señal solo con 12 casos o más y una diferencia clara; se le manda a las IA. Escribe el nombre del activo en ⚙ para que cada par tenga su propia memoria."></div>
 
     <div id="problem" class="hidden"></div>
 
@@ -96,13 +103,13 @@
         <span id="tr-losses" class="loss">0</span>
         <span id="tr-ties" class="tie hidden" title="Empates: la plataforma devolvió lo apostado (globo amarillo). No cuentan ni como ganada ni como perdida.">0</span>
       </div>
-      <div class="counter-bar"><div id="tr-bar"></div></div>
+      <div class="counter-bar detail"><div id="tr-bar"></div></div>
       <div id="tr-rate"></div>
-      <div id="sc-line"></div>
-      <div id="ai-scores" class="hidden" title="Aciertos de cada IA por separado: cuántas veces el precio fue hacia donde ella dijo, aunque la señal mostrada haya sido otra. Sirve para ver cuál conviene dejar activa."></div>
-      <div id="ai-cost" class="hidden" title="Costo aproximado por predicción de cada IA: tokens reales que informa cada proveedor, multiplicados por un precio de referencia (puede no coincidir con tu factura). Entre paréntesis, cuánto tarda en contestar."></div>
-      <div id="sc-instant" class="hidden" title="La misma pulsación de PREDECIR, pero medida con la señal que las reglas darían en ese instante, sin esperar a la IA. Sirve para comparar: si acierta más que la señal mostrada, conviene activar 'Señal al instante' en ⚙."></div>
-      <button id="btn-reset" title="Pone los contadores en cero">Reiniciar</button>
+      <div id="sc-line" class="detail"></div>
+      <div id="ai-scores" class="hidden detail" title="Aciertos de cada IA por separado: cuántas veces el precio fue hacia donde ella dijo, aunque la señal mostrada haya sido otra. Sirve para ver cuál conviene dejar activa."></div>
+      <div id="ai-cost" class="hidden detail" title="Costo aproximado por predicción de cada IA: tokens reales que informa cada proveedor, multiplicados por un precio de referencia (puede no coincidir con tu factura). Entre paréntesis, cuánto tarda en contestar."></div>
+      <div id="sc-instant" class="hidden detail" title="La misma pulsación de PREDECIR, pero medida con la señal que las reglas darían en ese instante, sin esperar a la IA. Sirve para comparar: si acierta más que la señal mostrada, conviene activar 'Señal al instante' en ⚙."></div>
+      <button id="btn-reset" class="detail" title="Pone los contadores en cero">Reiniciar</button>
     </div>
 
     <!-- Ajustes (ocultos hasta pulsar el engrane) -->

@@ -24,6 +24,54 @@ Solo muestra información. No hace clic, no apuesta y no se conecta a la platafo
 - Úsalo en **cuenta demo**. El marcador es para que veas con tus propios datos
   si la señal sirve, sin poner dinero.
 
+## Configuración recomendada (versión del 14 de noviembre de 2026)
+
+La que mejor le ha funcionado al autor, en EUR/USD OTC de Pocket Option:
+
+| Dónde | Ajuste |
+| --- | --- |
+| Gráfica | Velas **S15** (15 segundos) |
+| Gráfica | Escala **M4** (botón de abajo a la izquierda) |
+| Plataforma | Tiempo **00:00:03** (temporizador de 3 segundos) |
+| Panel ⚙ | Cada señal vale **3** segundos |
+| Panel ⚙ | Análisis entre señales **5** segundos |
+| Panel ⚙ | Pago: el que muestre la plataforma (92 % en la imagen) |
+
+**Cómo marcar la zona de la gráfica** (⚙ → «Marcar gráfica» y arrastrar el recuadro azul):
+
+![Cómo marcar la zona de la gráfica](docs/como-marcar-la-zona.png)
+
+1. Empieza a la **derecha del botón «A»** de la plataforma (si queda dentro, tapa velas y el
+   panel avisa «un aviso de la plataforma tapa velas en medio»).
+2. Termina **después de los números de precio** de la derecha: así el panel lee la cotización,
+   da las medidas en pips y no deja señales «sin medir».
+3. Arriba, por debajo de la barra del activo.
+4. Abajo, por encima de las horas.
+
+## Novedades de esta versión
+
+- **Panel compacto**: la señal, su porcentaje de confianza, el botón, la barra y el marcador.
+  El detalle (las 8 lecturas, patrón, memoria, marcador de cada IA) se abre con **▾**.
+- **Porcentaje de confianza**: debajo de ARRIBA / ABAJO, el acierto *medido* de las señales del
+  mismo nivel (alta, media, baja) y del mismo plazo en los últimos 7 días, con «acertó X de N».
+  Es lo medido, no una promesa.
+- **Zona de entrada**: al salir la señal se dibujan dos líneas, la del *mejor precio* (la orilla)
+  y la *límite*; entre las dos está bien entrar. Una raya blanca marca el precio de referencia
+  (el de la señal) y dice si va ganando o perdiendo (`src/entry.js`).
+- **Soporte y resistencia medidos** con pivotes de las últimas 80 velas, con sus toques y si el
+  nivel está *vigente* o *invertido* (`src/levels.js`). Son los mismos que se mandan a las IA.
+- **Marcador siempre sobre la vela en curso**, con su reloj («lleva 9 s · faltan 6 s»). Si la
+  vela en curso no está a la vista, se oculta y avisa (`src/candleclock.js`).
+- **Freno para la IA**: si la vela en curso ya está estirada hacia el lado de la señal (1.5 veces
+  lo normal) o ya van 4 velas seguidas de ese color, la señal no se sigue: ESPERAR (o confianza
+  baja si está activo «Dar siempre ARRIBA o ABAJO»).
+- **Sin predicción, el panel se libera** en 10 segundos como mucho (no espera todo el plazo).
+- **Plazos largos**: con «Cada señal vale» en 300 la señal dura 5 minutos exactos (velas M1).
+- **Registro de motivos**: en `registro\AAAA-MM-DD.csv` quedan lo que dijo cada IA (`A`), el
+  motivo final (`M`) y cómo estaba la vela (`C`), para revisar después por qué salió cada señal.
+- **Foto real con el panel**: ⚙ → «Guardar captura» deja `capturas\HHMMSS_pantalla.png`. Las
+  capturas normales no ven el panel porque se oculta para no leerse a sí mismo.
+
 ## Cómo abrirlo
 
 Doble clic en `iniciar.bat`, o en una terminal dentro de esta carpeta:
