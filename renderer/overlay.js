@@ -126,6 +126,10 @@ $('btn-predict').addEventListener('click', () => api.predict());
 $('auto-mode').addEventListener('change', (e) => api.setManual(!e.target.checked));
 $('instant').addEventListener('change', (e) => api.setInstant(e.target.checked));
 $('asset').addEventListener('change', (e) => api.setAsset(e.target.value));
+$('pattern-veto').addEventListener('change', (e) => api.setPatternVeto(e.target.checked));
+$('anti-rebound').addEventListener('change', (e) => api.setAntiRebound(e.target.checked));
+$('internal-source').addEventListener('change', (e) => api.setInternalSource(e.target.checked));
+$('btn-visor').addEventListener('click', () => api.toggleVisor());
 
 // IA: tres proveedores, cada uno con su clave. Los de ChatGPT conservan sus ids de siempre.
 const AI_BLOCKS = [
@@ -505,23 +509,32 @@ api.onState((s) => {
     $('signal-detail').title = s.signal ? s.signal.reason : '';
     let source = s.signal && s.signal.source ? (s.signal.source === 'ia' ? 'IA' : 'reglas') : '';
     if (source && dir && s.signal.confidence) source += ` · ${s.signal.confidence}`;
+    // Señal vetada: se dice qué veto fue y hacia dónde iba.
+    if (s.veto) source = `${s.veto.kind === 'patron' ? 'patrón desactivado' : 'veto anti-rebote'} · iba ${s.veto.dir === 'up' ? 'ARRIBA' : 'ABAJO'}`;
     $('signal-source').textContent = source;
   }
-  // Porcentaje de confianza de la señal en curso: de las señales de su mismo nivel (alta, media,
-  // baja) ya calificadas, cuántas acertaron. Verde si supera el mínimo que pide el pago; ámbar si no.
-  const conf = !waiting && !resting && !analyzing ? s.confidence : null;
+  // Porcentaje de la señal en curso: el acierto MEDIDO de su patrón (últimas 100 operaciones de ese
+  // patrón, a este plazo). Verde si supera el mínimo que pide el pago real; ámbar si no. El nivel de
+  // confianza (alta / media / baja) sigue arriba, junto a quién dio la señal, pero ya no es el criterio:
+  // medido en 164 operaciones, no separaba las ganadoras de las perdedoras.
+  const showing = !waiting && !resting && !analyzing;
+  const pat = showing ? s.pattern : null;
   const pct = $('signal-pct');
   const note = $('signal-pct-note');
-  note.classList.toggle('hidden', !conf);
-  if (conf) {
-    pct.className = conf.rate === null ? '' : conf.rate >= s.trades.breakEven ? 'good' : 'bad';
-    pct.textContent = conf.rate === null ? '— %' : `${conf.rate} %`;
-    note.textContent = conf.total
-      ? `confianza ${conf.level} · acertó ${conf.wins} de ${conf.total}${conf.total < 20 ? ' · pocas señales' : ''}`
-      : `confianza ${conf.level} · aún sin señales medidas`;
+  note.classList.toggle('hidden', !pat);
+  if (pat) {
+    pct.className = pat.accuracy === null ? '' : pat.accuracy >= pat.breakEven ? 'good' : 'bad';
+    pct.textContent = pat.accuracy === null ? '— %' : `${Math.round(pat.accuracy)} %`;
+    const money = `${pat.pnl > 0 ? '+' : ''}${pat.pnl.toFixed(2)}`;
+    let text = pat.decided
+      ? `${pat.text} · ${pat.decided} op. · P&L ${money}${pat.decided < 20 ? ' · pocas' : ` · mín. ${pat.breakEven} %`}`
+      : `${pat.text} · aún sin operaciones medidas`;
+    if (pat.vetoed) text += ' · DESACTIVADO por estadística';
+    note.textContent = text;
+    note.title = pat.detail || '';
   } else pct.className = 'hidden';
   // Entrada sugerida: dónde esperar el precio y si ya llegó a la línea.
-  const plan = conf && dir ? s.entry : null;
+  const plan = showing && dir ? s.entry : null;
   $('signal-entry').classList.toggle('hidden', !plan);
   if (plan) {
     $('signal-entry').classList.toggle('taken', plan.zone ? plan.inZone !== false : plan.filled);
@@ -558,6 +571,48 @@ api.onState((s) => {
     $('memory').textContent = `Memoria (${s.memory.total} velas): ${s.memory.text}`;
     $('memory').classList.toggle('found', s.memory.votes);
   }
+
+  // --- Salud de los datos: fuente activa (INTERNA / PÍXELES), edad del último dato y aviso ---
+  const src = s.source;
+  const chip = $('source-chip');
+  chip.classList.toggle('hidden', !src || s.cycleSeconds === 0);
+  if (src) {
+    const internal = src.active === 'INTERNA';
+    let text = `Fuente: ${src.active}`;
+    if (internal) text += ` · ${src.ageSeconds === null ? '—' : src.ageSeconds.toFixed(1)} s`;
+    else if (s.internalSource) {
+      // En corto (el detalle completo va en la ayuda al pasar el ratón).
+      const SHORT = { 'otro-par': 'interna en otro par', 'no-cuadra': /no coincide/.test(src.detail) ? 'interna no coincide' : 'interna en espera', 'pocas-velas': 'interna con pocas velas' };
+      text += src.warn ? ` · interna sin datos${src.ageSeconds !== null ? ` hace ${Math.round(src.ageSeconds)} s` : ''}` : ` · ${SHORT[src.code] || src.detail}`;
+    }
+    if (s.payoutNow) text += ` · pago ${s.payoutNow.value} %${s.payoutNow.source === 'interna' ? ' (demo)' : ''}`;
+    chip.textContent = text;
+    chip.className = internal ? 'internal' : s.internalSource && (src.warn || src.code === 'otro-par' || src.code === 'no-cuadra') ? 'warn' : '';
+    chip.title = internal
+      ? `Precios y velas leídos de los datos internos de la terminal demo (${src.detail}). Edad del último dato: ${src.ageSeconds === null ? '—' : src.ageSeconds.toFixed(1)} s.`
+      : s.internalSource
+        ? `Leyendo los píxeles de la pantalla porque ${src.detail}.`
+        : 'Leyendo los píxeles de la pantalla (la fuente interna está apagada en ⚙).';
+  }
+
+  // --- Estadística por patrón y lo medido del veto anti-rebote (en el detalle) ---
+  const table = $('pattern-table');
+  const rows = s.patterns || [];
+  table.classList.toggle('hidden', rows.length === 0 || s.cycleSeconds === 0);
+  if (rows.length) {
+    table.textContent = '';
+    for (const row of rows) {
+      const line = document.createElement('div');
+      line.className = row.off ? 'off' : row.accuracy !== null && row.decided >= 20 && row.accuracy >= row.breakEven ? 'good' : '';
+      const money = `${row.pnl > 0 ? '+' : ''}${row.pnl.toFixed(2)}`;
+      line.textContent = `${row.off ? '✕ ' : ''}${row.text}: ${row.accuracy === null ? '—' : `${Math.round(row.accuracy)} %`} · ${row.decided} op. · ${money}`;
+      table.appendChild(line);
+    }
+  }
+  const rb = s.rebound || { wins: 0, losses: 0, ties: 0 };
+  const blocked = rb.wins + rb.losses + rb.ties;
+  $('rebound-line').classList.toggle('hidden', blocked === 0);
+  if (blocked) $('rebound-line').textContent = `Anti-rebote: bloqueó ${blocked} · habrían ganado ${rb.wins}, perdido ${rb.losses}`;
 
   // --- Aviso si algo impide leer la gráfica ---
   const problem = !/^Leyendo /.test(s.status);
@@ -637,6 +692,10 @@ api.onState((s) => {
   if (document.activeElement !== $('cycle')) $('cycle').value = s.cycleSeconds;
   if (document.activeElement !== $('pause')) $('pause').value = s.pauseSeconds;
   $('always').checked = s.alwaysSignal;
+  $('pattern-veto').checked = s.patternVeto !== false;
+  $('anti-rebound').checked = s.antiRebound !== false;
+  $('internal-source').checked = s.internalSource !== false;
+  $('btn-visor').disabled = s.internalSource === false;
   $('auto-mode').checked = !s.manual;
   $('instant').checked = s.instant;
   $('instant').disabled = !s.manual; // solo aplica con el botón

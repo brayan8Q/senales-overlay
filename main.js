@@ -26,7 +26,7 @@ const { readAxis } = require('./src/axis');
 const { measureRegime } = require('./src/regime');
 const { createMarketMemory, segmentsOf, segmentCount } = require('./src/memory');
 const { costOf } = require('./src/prices');
-const { summarize } = require('./src/score');
+const { summarize, patternStats } = require('./src/score');
 const { findResultBadges, viewJumped, createBadgeCounter } = require('./src/badges');
 const { MIN_CANDLES } = require('./src/signal');
 const { describeChart } = require('./src/ai');
@@ -34,6 +34,9 @@ const { PROVIDERS } = require('./src/providers');
 const { combine, nickname, scoreVotes, rememberOutcome, feedbackFor, PROVIDER_ORDER } = require('./src/council');
 const { niveles, VENTANA: LEVEL_CANDLES } = require('./src/levels');
 const { createCandleClock } = require('./src/candleclock');
+const { PATTERNS, PATTERN_KEYS } = require('./src/formations');
+const { createFeed, assetKey, PERIODS: FEED_PERIODS } = require('./src/feed');
+const { fitPriceMap, toScreen } = require('./src/pricemap');
 
 // PREDECIR con la vela ya avanzada: true = esperar a que abra la vela siguiente y analizar ahi;
 // false = analizar y predecir al momento de pulsar. El usuario pidio quitar la espera (13 nov 2026).
@@ -83,6 +86,9 @@ const config = {
   manual: true,
   asset: '',
   instant: false, // con boton: dar la senal al instante, sin pausa ni espera a la IA
+  patternVeto: true, // vetar los patrones con mala estadistica (20+ operaciones bajo su punto de equilibrio)
+  antiRebound: true, // no dar senal a favor de una vertical recien hecha (ver src/rebound.js)
+  internalSource: true, // precios y velas de los datos internos de la terminal demo (ver src/feed.js)
 };
 /** Senal al instante: solo aplica cuando la prediccion se pide con el boton. */
 const instantMode = () => config.instant && config.manual;
@@ -210,6 +216,337 @@ function confidenceOf(signal) {
   return { level: signal.confidence, wins: cell.wins, total, rate: total ? Math.round((100 * cell.wins) / total) : null };
 }
 
+// ---------- Estadistica por PATRON y vetos (15 nov 2026) ----------
+// Cada senal medida se guarda con el patron que la disparo, el pago de ese momento y su
+// resultado (linea "P" del registro). De ahi sale, por patron, el acierto y el P&L de las
+// ultimas 100 operaciones (src/score.js), que el panel muestra junto a la senal. Un patron con
+// 20+ operaciones y acierto por debajo de su punto de equilibrio queda vetado (si el veto esta
+// encendido): sus senales salen como ESPERAR y se siguen midiendo en papel.
+//   P,ms,patron,lado,resultado,pago,fuente del pago,segundos,tipo
+//   tipo: op = senal mostrada · veto-patron / veto-rebote = senal vetada, medida en papel
+const PATTERN_DAYS = 30; // dias de registro que se leen al abrir
+let patternOps = []; // operaciones que cuentan para la estadistica: { pattern, result, payout }
+let patternTable = {}; // patternStats(patternOps)
+// Senales vetadas por anti-rebote y medidas en papel: cuantas habrian ganado o perdido.
+let reboundTally = { wins: 0, losses: 0, ties: 0 };
+const resultKey = (text) => (/^acert/.test(text) ? 'win' : /^fall/.test(text) ? 'loss' : /^empate/.test(text) ? 'tie' : null);
+// Pago que muestra la terminal demo para el par (fuente interna): { value, at, symbol }.
+let visorPayout = null;
+/** Pago de este momento: el de la fuente interna si se conoce y es del mismo par; si no, el escrito en el panel. */
+function payoutNow() {
+  const fresh = visorPayout && Date.now() - visorPayout.at <= 15000;
+  const same = fresh && (!config.asset || assetKey(visorPayout.symbol) === assetKey(config.asset));
+  return same ? { value: visorPayout.value, source: 'interna' } : { value: config.payout, source: 'config' };
+}
+/** Anota una operacion medida (mostrada o vetada) y actualiza la estadistica. */
+function addPatternOp(now, { pattern, dir, result, kind }) {
+  const key = resultKey(result || '');
+  const pay = payoutNow();
+  record(`P,${now},${pattern},${dir},${key || 'sin-medir'},${pay.value},${pay.source},${config.cycleSeconds},${kind}`);
+  if (!key) return;
+  if (kind === 'veto-rebote') {
+    reboundTally[key === 'win' ? 'wins' : key === 'loss' ? 'losses' : 'ties']++;
+    return;
+  }
+  patternOps.push({ pattern, result: key, payout: pay.value });
+  if (patternOps.length > 5000) patternOps = patternOps.slice(-4000);
+  patternTable = patternStats(patternOps);
+}
+/** Al abrir (o al cambiar de plazo): lee del registro las operaciones ya medidas de este mismo plazo. */
+function loadPatternStats() {
+  patternOps = [];
+  reboundTally = { wins: 0, losses: 0, ties: 0 };
+  try {
+    const dir = path.join(app.getPath('userData'), 'registro');
+    const files = fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}\.csv$/.test(f)).sort().slice(-PATTERN_DAYS);
+    for (const file of files) {
+      for (const line of fs.readFileSync(path.join(dir, file), 'utf8').split(/\r?\n/)) {
+        if (!line.startsWith('P,')) continue;
+        const [, , pattern, , result, payout, , seconds, kind] = line.split(',');
+        if (Number(seconds) !== config.cycleSeconds || !['win', 'loss', 'tie'].includes(result)) continue;
+        if (kind === 'veto-rebote') reboundTally[result === 'win' ? 'wins' : result === 'loss' ? 'losses' : 'ties']++;
+        else patternOps.push({ pattern, result, payout: Number(payout) });
+      }
+    }
+  } catch {
+    /* sin registro todavia */
+  }
+  patternTable = patternStats(patternOps);
+}
+/** Patrones desactivados ahora: { clave: motivo }, o null (ninguno, o el veto esta apagado). */
+function vetoedPatterns() {
+  if (!config.patternVeto) return null;
+  const out = {};
+  for (const stat of Object.values(patternTable)) {
+    if (stat.vetoed) out[stat.pattern] = `acierta ${stat.accuracy} % en ${stat.decided} operaciones y necesita ${stat.breakEven} %`;
+  }
+  return Object.keys(out).length ? out : null;
+}
+/** Patron de la senal en curso con su estadistica, para el panel (null si no hay senal con lado ni veto). */
+function patternInfo(signal) {
+  if (!signal || !signal.pattern || (!signal.dir && !signal.veto)) return null;
+  const key = signal.pattern.key;
+  const stat = patternTable[key] || null;
+  return {
+    key,
+    text: PATTERNS[key] || key,
+    detail: signal.pattern.detail || '',
+    n: stat ? stat.n : 0,
+    decided: stat ? stat.decided : 0,
+    accuracy: stat ? stat.accuracy : null,
+    pnl: stat ? stat.pnl : 0,
+    breakEven: stat ? stat.breakEven : null,
+    avgPayout: stat ? stat.avgPayout : null,
+    vetoed: Boolean(stat && stat.vetoed && config.patternVeto),
+  };
+}
+
+// ---------- FUENTE INTERNA de precios y velas (15 nov 2026) ----------
+// Una ventana aparte (oculta) abre la terminal DEMO publica de Pocket Option, sin iniciar sesion.
+// De ahi solo se ESCUCHA lo que la pagina recibe por su conexion (src/feed.js): precios dos veces
+// por segundo, con su hora exacta, y el historial de velas. No se manda nada ni se toca cuenta alguna.
+// Los numeros (velas, precio, reloj de la vela) salen de ahi; la pantalla se sigue leyendo para
+// saber DONDE dibujar y para comprobar que las dos graficas son la misma (src/pricemap.js). Si la
+// fuente interna falla, lleva mas de 5 s sin datos, o no cuadra con la grafica, el panel vuelve
+// solo a la lectura por pixeles.
+const VISOR_URL = 'https://pocketoption.com/en/cabinet/try-demo/';
+const FEED_MISSES_TO_DROP = 4; // lecturas seguidas sin cuadrar antes de soltar la fuente interna
+const feed = createFeed();
+let visor = null; // ventana con la terminal demo
+let visorError = '';
+let quitting = false;
+let feedMap = null; // recta precio -> pantalla y geometria de las velas: { A, B, at, shift, pitch, geometry }
+let feedPeriod = 0; // duracion (s) de las velas de la grafica, confirmada por el ajuste
+let feedMisses = 0;
+let feedLastBucket = null; // hora de la vela en curso de la fuente en la lectura anterior
+let blindReads = 0; // lecturas seguidas con la fuente interna activa y la grafica sin verse bien
+const BLIND_READS_TO_WARN = 4;
+// Indicador de salud: fuente activa, edad del ultimo dato interno y aviso.
+let sourceInfo = { active: 'PÍXELES', enabled: false, code: 'apagada', ageMs: null, stale: false, detail: '' };
+let sourceLogged = '';
+function setSource(active, code, detail, extra = {}) {
+  const status = feed.status();
+  const ageMs = extra.ageMs !== undefined ? extra.ageMs : status.lastFrameAt ? Date.now() - status.lastFrameAt : null;
+  sourceInfo = { active, enabled: Boolean(config.internalSource), code, detail, stale: false, ...extra, ageMs };
+  // Registro: F,ms,fuente activa,motivo (solo cuando cambia).
+  const key = `${active}|${code}`;
+  if (key !== sourceLogged) {
+    sourceLogged = key;
+    record(`F,${Date.now()},${active},${code},${String(detail).replace(/[,\r\n]+/g, ' ')}`);
+  }
+}
+
+/**
+ * Lo que da la fuente interna en esta lectura, ya en unidades de pantalla, o null si no se puede
+ * usar (y entonces todo sale de los pixeles, como siempre).
+ * @param {Array} candles  Velas leidas de la pantalla en esta lectura.
+ * @param {boolean} pixelsOk  Esa lectura es de fiar (verificada y con la vela en curso a la vista).
+ */
+function internalView(now, candles, pixelsOk) {
+  const off = (code, detail, extra) => {
+    setSource('PÍXELES', code, detail, extra);
+    feedLastBucket = null;
+    return null;
+  };
+  if (!config.internalSource) return off('apagada', 'fuente interna apagada');
+  if (!feed.status().frames) return off('sin-datos', visorError || 'la fuente interna aún no entrega datos', { stale: true });
+  const query = (period) => feed.snapshot({ now, period, asset: config.asset });
+  const unusable = (snap) => {
+    if (!snap.ok) return off(snap.wrongAsset ? 'otro-par' : 'sin-datos', snap.reason, { stale: !snap.wrongAsset });
+    if (snap.stale) return off('caida', `la fuente interna lleva ${Math.round(snap.ageMs / 1000)} s sin actualizar`, { stale: true, ageMs: snap.ageMs });
+    return undefined;
+  };
+  // Primero lo que no depende de la pantalla: que la terminal este en el mismo par y con datos frescos.
+  {
+    const probe = unusable(query(feedPeriod || (memoryInfo && memoryInfo.candleSeconds) || 15));
+    if (probe !== undefined) return probe;
+  }
+  let snap = null;
+  let fitted = false;
+  if (pixelsOk && candles.length >= 6) {
+    // Se compara la pantalla con la fuente. Si aun no se sabe la duracion de las velas, se
+    // prueban todas: solo la correcta cuadra.
+    const hint = memoryInfo && memoryInfo.candleSeconds ? memoryInfo.candleSeconds : 0;
+    const periods = feedPeriod ? [feedPeriod] : [...new Set([hint, ...FEED_PERIODS].filter(Boolean))];
+    let best = null;
+    for (const period of periods) {
+      const candidate = query(period);
+      const bad = unusable(candidate);
+      if (bad !== undefined) return bad;
+      const fit = fitPriceMap(candles, candidate);
+      if (fit && fit.valid && (!best || fit.rms < best.fit.rms)) best = { fit, snap: candidate };
+    }
+    if (best) {
+      const xs = candles.map((c) => c.x0);
+      const steps = xs.slice(1).map((x, i) => x - xs[i]).sort((a, b) => a - b);
+      feedPeriod = best.snap.period;
+      feedMisses = 0;
+      feedMap = {
+        A: best.fit.A,
+        B: best.fit.B,
+        at: now,
+        shift: best.fit.shift,
+        pitch: steps.length ? steps[Math.floor((steps.length - 1) / 2)] : 0,
+        geometry: candles.map((c) => ({ x0: c.x0, x1: c.x1 })).reverse(), // de la vela en curso hacia atras
+      };
+      snap = best.snap;
+      fitted = true;
+    } else if (++feedMisses >= FEED_MISSES_TO_DROP) {
+      feedMap = null;
+      feedPeriod = 0; // se vuelve a buscar la duracion: quiza cambio la temporalidad
+    }
+  }
+  if (!feedMap || now - feedMap.at > GOOD_CANDLES_MS) {
+    feedMap = null;
+    return off(
+      'no-cuadra',
+      feedMisses >= FEED_MISSES_TO_DROP ? 'la fuente interna no coincide con la gráfica de la pantalla (¿otro par u otra temporalidad?)' : 'la fuente interna espera a ver bien la gráfica para ubicarse',
+    );
+  }
+  if (!snap) {
+    snap = query(feedPeriod);
+    const bad = unusable(snap);
+    if (bad !== undefined) return bad;
+  }
+  const map = feedMap;
+  const shift = fitted ? map.shift : 0;
+  const all = [...snap.closed, snap.forming];
+  // Velas a la vista: los numeros de la fuente, colocados donde la pantalla dibuja cada vela.
+  const visible = [];
+  for (let j = Math.min(all.length - 1, map.geometry.length - 1 + shift); j >= 0; j--) {
+    const g = j - shift;
+    const geometry = g >= 0 ? map.geometry[g] : { x0: map.geometry[0].x0 - g * map.pitch, x1: map.geometry[0].x1 - g * map.pitch };
+    visible.push(toScreen(map, all[all.length - 1 - j], geometry));
+  }
+  if (visible.length < 3) return off('pocas-velas', 'la fuente interna aún tiene pocas velas');
+  const closedRows = snap.closed.slice(-LEVEL_CANDLES).map((c) => toScreen(map, c));
+  // Velas que cerraron desde la lectura anterior (por la hora de la fuente: exacto).
+  let added = [];
+  if (feedLastBucket !== null && snap.forming.time > feedLastBucket) {
+    const count = Math.round((snap.forming.time - feedLastBucket) / snap.period);
+    if (count >= 1 && count <= 3) added = closedRows.slice(-count);
+  }
+  feedLastBucket = snap.forming.time;
+  const decimals = snap.decimals || 5;
+  const pip = decimals >= 4 ? 0.0001 : decimals >= 2 ? 0.01 : 10 ** -decimals;
+  setSource('INTERNA', 'ok', `${snap.label} · velas de ${snap.period} s`, { ageMs: snap.ageMs });
+  return {
+    candles: visible,
+    closed: closedRows,
+    added,
+    price: snap.price,
+    priceY: -(map.A + map.B * snap.price),
+    priceText: snap.price.toFixed(decimals),
+    // Empate = mismo precio exacto (con la fuente interna no hay redondeo de pixeles).
+    quote: { value: snap.price, perPixel: 1 / map.B, tolerance: 0.5 * 10 ** -decimals },
+    // Con la misma forma que el eje leido de la pantalla (src/axis.js), para el resto del panel.
+    axis: { internal: true, anchored: true, perPixel: 1 / map.B, pip, decimals, labels: 0, at: (row) => (-row - map.A) / map.B, rowOf: (price) => -(map.A + map.B * price) },
+    clock: { known: true, seconds: snap.period, startedAt: snap.clock.startedAt, elapsedMs: snap.clock.elapsedMs, remainingMs: snap.clock.remainingMs, closedNow: added.length > 0, inferred: false },
+  };
+}
+
+/** Abre (oculta) la ventana con la terminal demo y se pone a escuchar su conexion. */
+function createVisor() {
+  if (visor || !config.internalSource) return;
+  try {
+    visor = new BrowserWindow({
+      width: 1180,
+      height: 760,
+      show: false,
+      title: 'Fuente interna · terminal demo de Pocket Option',
+      autoHideMenuBar: true,
+      webPreferences: { partition: 'persist:fuente-interna', contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
+    });
+    // Cerrarla con la X solo la esconde: sigue dando datos. Se cierra de verdad al salir del panel.
+    visor.on('close', (event) => {
+      if (quitting) return;
+      event.preventDefault();
+      visor.hide();
+    });
+    visor.on('closed', () => {
+      visor = null;
+    });
+    const contents = visor.webContents;
+    contents.setWindowOpenHandler(() => ({ action: 'deny' })); // la terminal no abre mas ventanas
+    contents.on('did-fail-load', (_e, _code, description, _url, isMainFrame) => {
+      if (isMainFrame) visorError = `la terminal demo no cargó (${description})`;
+    });
+    contents.on('did-finish-load', () => {
+      visorError = '';
+    });
+    // Se escucha el websocket de la pagina con el depurador integrado (CDP), sin tocar la pagina.
+    const sockets = new Set();
+    const bug = contents.debugger;
+    bug.attach('1.3');
+    bug.on('detach', (_e, reason) => {
+      visorError = `se soltó la escucha de la terminal demo (${reason})`;
+    });
+    bug.on('message', (_e, method, params) => {
+      if (method === 'Network.webSocketCreated') {
+        if (/socket\.io/.test(params.url)) sockets.add(params.requestId);
+      } else if (method === 'Network.webSocketClosed') {
+        sockets.delete(params.requestId);
+      } else if ((method === 'Network.webSocketFrameReceived' || method === 'Network.webSocketFrameSent') && sockets.has(params.requestId)) {
+        const frame = params.response;
+        // De lo que la pagina MANDA solo se mira a que par cambio la grafica (feed.js); nada se guarda.
+        feed.onFrame(frame.payloadData, { binary: frame.opcode === 2, sent: method === 'Network.webSocketFrameSent', now: Date.now() });
+      }
+    });
+    Promise.resolve(bug.sendCommand('Network.enable')).catch((err) => {
+      visorError = `no se pudo escuchar la terminal demo: ${err.message}`;
+    });
+    visor.loadURL(VISOR_URL);
+  } catch (err) {
+    visorError = `no se pudo abrir la fuente interna: ${err.message}`;
+    visor = null;
+  }
+}
+function closeVisor() {
+  if (!visor) return;
+  const closing = visor;
+  visor = null;
+  try {
+    closing.destroy();
+  } catch {
+    /* ya estaba cerrada */
+  }
+  feed.reset();
+  feedMap = null;
+  feedPeriod = 0;
+  visorPayout = null;
+}
+// La terminal demo recuerda su ultimo par en su propio almacenamiento ("po-td-asset"). Si esta
+// en un par distinto del que se opera (campo "Activo" de ajustes), se le deja anotado el correcto
+// y se recarga: abre ya en ese par. Como mucho 3 intentos por par, uno cada 20 s.
+let visorAssetTry = { key: '', at: 0, count: 0 };
+function alignVisorAsset(now) {
+  if (!visor || visor.isDestroyed() || !config.asset) return;
+  const shown = feed.status().chartAsset;
+  const want = assetKey(config.asset);
+  if (!shown || assetKey(shown) === want) return;
+  const symbol = feed.symbolFor(config.asset);
+  if (!symbol) return; // ese par no esta en la terminal (o su lista aun no llega): se elige a mano
+  const same = visorAssetTry.key === want;
+  if (same && (visorAssetTry.count >= 3 || now - visorAssetTry.at < 20000)) return;
+  visorAssetTry = { key: want, at: now, count: same ? visorAssetTry.count + 1 : 1 };
+  record(`F,${now},visor,cambio-de-par,${shown} -> ${symbol}`);
+  visor.webContents.executeJavaScript(`localStorage.setItem('po-td-asset', ${JSON.stringify(symbol)}); location.reload();`).catch(() => {});
+}
+/** Cada pocos segundos: el pago y el par que muestra la terminal demo (se leen de su pagina). */
+async function readVisorPayout() {
+  if (!visor || visor.isDestroyed()) return;
+  alignVisorAsset(Date.now());
+  try {
+    const seen = await visor.webContents.executeJavaScript(
+      `(() => { const pay = document.querySelector('.block--payout'); const sym = document.querySelector('.current-symbol'); return { pay: pay ? pay.innerText : '', sym: sym ? sym.innerText : '' }; })()`,
+    );
+    const match = /(\d{1,3})\s*%/.exec((seen && seen.pay) || '');
+    if (match) visorPayout = { value: Number(match[1]), at: Date.now(), symbol: String(seen.sym || '').trim() };
+  } catch {
+    /* la pagina aun no carga: se intenta en la siguiente */
+  }
+}
+
 // ---------- Foto real de la pantalla CON el panel ----------
 // Mientras el panel lee, su ventana esta oculta a las capturas de pantalla (para no leerse a si
 // mismo), asi que ninguna herramienta de capturas lo ve. Para tener una foto de verdad se hace
@@ -281,7 +618,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -574,6 +911,9 @@ function loadConfig() {
     if (typeof saved.manual === 'boolean') config.manual = saved.manual;
     if (typeof saved.instant === 'boolean') config.instant = saved.instant;
     if (typeof saved.untilClose === 'boolean') config.untilClose = saved.untilClose;
+    if (typeof saved.patternVeto === 'boolean') config.patternVeto = saved.patternVeto;
+    if (typeof saved.antiRebound === 'boolean') config.antiRebound = saved.antiRebound;
+    if (typeof saved.internalSource === 'boolean') config.internalSource = saved.internalSource;
     if (Number.isFinite(saved.entryDelayMs)) config.entryDelayMs = Math.max(0, Math.min(ENTRY_MAX_MS, saved.entryDelayMs));
     if (typeof saved.asset === 'string') config.asset = saved.asset;
   } catch {
@@ -614,6 +954,10 @@ function statusText() {
   if (!auto) return 'Escáner en pausa';
   if (last.status === 'no-chart') return 'No veo velas verdes y rojas en la zona';
   // La vela en curso no se ve (algo la tapa, o la grafica esta movida hacia atras): no se marca una vieja.
+  // Con la fuente interna los numeros siguen llegando aunque algo tape la grafica: se avisa.
+  if (config.cycleSeconds > 0 && sourceInfo.active === 'INTERNA' && blindReads >= BLIND_READS_TO_WARN) {
+    return 'Gráfica tapada: sigo leyendo con la fuente interna';
+  }
   if (config.cycleSeconds > 0 && missingReads >= MISSING_READS_TO_WARN && last.status !== 'no-price') {
     return 'La vela actual no está a la vista (algo la tapa o la gráfica está movida hacia atrás)';
   }
@@ -646,6 +990,19 @@ function publish(statusOverride) {
     signal: last.signal,
     // Porcentaje de confianza de la senal en curso: acierto medido de las senales de su mismo nivel.
     confidence: confidenceOf(last.signal),
+    // Patron que disparo la senal en curso, con su acierto y P&L medidos (ultimas 100 de ese patron).
+    pattern: patternInfo(last.signal),
+    // Senal vetada (anti-rebote o patron desactivado por estadistica): que veto fue y hacia donde iba.
+    veto: last.signal && last.signal.veto ? { kind: last.signal.veto.kind, dir: last.signal.veto.dir } : null,
+    // Tabla completa por patron (para el detalle) y lo medido en papel del veto anti-rebote.
+    patterns: PATTERN_KEYS.filter((key) => patternTable[key]).map((key) => ({ ...patternTable[key], text: PATTERNS[key], off: Boolean(patternTable[key].vetoed && config.patternVeto) })),
+    rebound: reboundTally,
+    patternVeto: config.patternVeto,
+    antiRebound: config.antiRebound,
+    internalSource: config.internalSource,
+    // Salud de los datos: fuente activa (INTERNA / PÍXELES), edad del ultimo dato interno y aviso.
+    source: { ...sourceInfo, ageSeconds: sourceInfo.ageMs === null ? null : Math.round(sourceInfo.ageMs / 100) / 10, warn: Boolean(config.internalSource && sourceInfo.active !== 'INTERNA' && sourceInfo.stale) },
+    payoutNow: payoutNow(), // pago de este momento y de donde sale (interna / config)
     // Entrada sugerida de la senal en curso: donde esperar el precio y si ya llego.
     entry: last.entry ? { kind: last.entry.text, filled: last.entry.filled, zone: Boolean(last.entry.zone), inZone: last.entry.inZone } : null,
     readings: last.readings || null, // lecturas en vivo (tendencia, vela actual, precio)
@@ -670,7 +1027,8 @@ function publish(statusOverride) {
     regime: regime && config.cycleSeconds > 0 ? { kind: regime.kind, text: regime.text } : null,
     // Memoria del mercado: que paso otras veces tras una racha de velas como la actual.
     memory: memoryInfo && config.cycleSeconds > 0 ? { text: memoryInfo.text, votes: memoryInfo.vote !== 0, total: memoryInfo.total } : null,
-    trades: { ...summarize(trades, config.payout), last: trades.last },
+    // El minimo para no perder se calcula con el pago de este momento (el real, si se conoce).
+    trades: { ...summarize(trades, payoutNow().value), last: trades.last },
     live: last.live,
     visible: last.visible,
     lastResult: last.lastResult,
@@ -756,18 +1114,37 @@ async function scanTick() {
       const check = quality.inspect(candles, priceY, now);
       // Lectura verificada: ademas, las velas deben coincidir con las dos lecturas anteriores.
       const verified = stability.check(candles);
-      const formingOk = check.forming && check.complete && verified;
-      const forming = candles[candles.length - 1] || null;
+      const pixelsOk = check.forming && check.complete && verified;
+      const pixelPriceY = priceY; // donde la pantalla muestra el precio (para el marcador de la vela)
+      const pixelForming = candles[candles.length - 1] || null;
+
+      // FUENTE INTERNA: si esta disponible y cuadra con la grafica, los numeros (velas, precio y
+      // reloj de la vela) salen de ahi; si no, de los pixeles, como siempre.
+      const wasInternal = sourceInfo.active === 'INTERNA';
+      const inner = internalView(now, candles, pixelsOk);
+      if (wasInternal && !inner) liveClock.reset(); // el reloj por pixeles se vuelve a poner en hora
+      blindReads = inner && !pixelsOk ? blindReads + 1 : 0;
+      const formingOk = inner ? true : pixelsOk;
+      const forming = inner ? inner.candles[inner.candles.length - 1] : pixelForming;
 
       // Eje de precios: se lee en cada lectura (es barato: recuerda los digitos ya vistos).
       // Da la cotizacion real, que no depende de las velas.
-      const read = readAxis(pixels.data, pixels.width, pixels.height, forming ? forming.x1 + 4 : 0);
-      axis = read;
-      const price = axis && axis.anchored && priceY !== null ? axis.at(priceY) : null;
-      const quote = price === null ? null : { value: price, perPixel: axis.perPixel };
-      priceText = price === null ? null : price.toFixed(axis.decimals);
+      let price;
+      let quote;
+      if (inner) {
+        axis = inner.axis;
+        priceY = inner.priceY;
+        price = inner.price;
+        quote = inner.quote;
+        priceText = inner.priceText;
+      } else {
+        axis = readAxis(pixels.data, pixels.width, pixels.height, pixelForming ? pixelForming.x1 + 4 : 0);
+        price = axis && axis.anchored && priceY !== null ? axis.at(priceY) : null;
+        quote = price === null ? null : { value: price, perPixel: axis.perPixel };
+        priceText = price === null ? null : price.toFixed(axis.decimals);
+      }
       if (priceText) {
-        record(`T,${now},${priceText},${axis.pip}`); // registro del precio real
+        record(`T,${now},${priceText},${axis.pip}${inner ? ',i' : ''}`); // registro del precio real (i = fuente interna)
         const lastQuote = track[track.length - 1];
         if (!lastQuote || now - lastQuote.time >= TRACK_STEP_MS) track.push({ time: now, value: price });
         while (track.length && now - track[0].time > trackMemoryMs()) track.shift();
@@ -778,14 +1155,16 @@ async function scanTick() {
       const clean = priceY !== null && (quote !== null || formingOk);
       coverReason = clean ? null : check.reason;
 
-      // Velas para el analisis: las de esta lectura si son de fiar; si algo las tapa, las ultimas
-      // buenas (el precio se sigue midiendo en vivo de todas formas).
-      if (formingOk) goodCandles = { time: now, candles };
-      const usable = formingOk || !goodCandles || now - goodCandles.time > GOOD_CANDLES_MS ? candles : goodCandles.candles;
+      // Velas para el analisis: las de la fuente interna; si no, las de esta lectura si son de
+      // fiar; si algo las tapa, las ultimas buenas (el precio se sigue midiendo en vivo de todas formas).
+      if (pixelsOk) goodCandles = { time: now, candles };
+      let usable = pixelsOk || !goodCandles || now - goodCandles.time > GOOD_CANDLES_MS ? candles : goodCandles.candles;
+      if (inner) usable = inner.candles;
 
       let closedDetected = false; // en esta lectura (verificada) se vio cerrar una vela
       if (formingOk) {
-        const hist = history.update(candles, priceY, now, trackMemoryMs());
+        // Historial largo: con la fuente interna ya viene completo; por pixeles se va acumulando.
+        const hist = inner ? { candles: inner.closed.slice(-60), added: inner.added, prices: [] } : history.update(candles, priceY, now, trackMemoryMs());
         closedDetected = hist.added.length > 0;
         // Memoria del mercado: se guarda cada vela que acaba de cerrar y se consulta que paso
         // las otras veces que la grafica estuvo en una situacion como la de ahora.
@@ -805,7 +1184,7 @@ async function scanTick() {
             hist.added.forEach((candle, i) =>
               marketMemory.add(candle, now - (hist.added.length - 1 - i) * step, unit, i === hist.added.length - 1 ? segments : ''),
             );
-            candleStartedAt = now; // acaba de cerrar una vela: empieza la siguiente
+            candleStartedAt = inner ? inner.clock.startedAt : now; // acaba de cerrar una vela: empieza la siguiente
           }
           // Se consulta en cada lectura: lo que dice la memoria depende tambien del momento de la vela.
           memoryInfo = marketMemory.stats(hist.candles, candleClock(now, forming));
@@ -829,15 +1208,18 @@ async function scanTick() {
           pips: axis ? { perPixel: axis.perPixel, pip: axis.pip } : null,
           trendCandles: longTrade() ? 20 : 12,
         });
-        longCandles = forming && hist.candles.length ? [...hist.candles, forming] : candles;
+        longCandles = forming && hist.candles.length ? [...hist.candles, forming] : usable;
         // Soporte y resistencia: ultimas 80 velas cerradas + la vela en curso + el precio de ahora.
         // Lo que sale de aqui es lo que se dibuja y lo que se les manda a las IA.
-        const levelHist = levelHistory.update(candles, priceY, now, 1000);
-        levels = forming ? niveles([...levelHist.candles, forming], priceY !== null ? -priceY : forming.close) : null;
+        const levelCandles = inner ? inner.closed : levelHistory.update(candles, priceY, now, 1000).candles;
+        levels = forming ? niveles([...levelCandles, forming], priceY !== null ? -priceY : forming.close) : null;
       }
-      // Reloj de la vela en curso: se pone en hora al ver cerrar una vela; si a la hora del cierre
-      // la grafica estaba tapada, el cierre lo da el reloj.
-      clockInfo = liveClock.update({ now, closed: closedDetected, seconds: memoryInfo && memoryInfo.candleSeconds ? memoryInfo.candleSeconds : 0 });
+      // Reloj de la vela en curso. Con la fuente interna es exacto (la hora del servidor). Por
+      // pixeles se pone en hora al ver cerrar una vela; si a la hora del cierre la grafica estaba
+      // tapada, el cierre lo da el reloj.
+      clockInfo = inner
+        ? inner.clock
+        : liveClock.update({ now, closed: closedDetected, seconds: memoryInfo && memoryInfo.candleSeconds ? memoryInfo.candleSeconds : 0 });
       const advice = councilAdvice(now);
       last = byTime.update({
         candles: usable,
@@ -853,7 +1235,7 @@ async function scanTick() {
         cycleMs: config.cycleSeconds * 1000,
         // Senal al instante (solo con boton): sin pausa de analisis y sin esperar a la IA.
         pauseMs: instantMode() ? 0 : config.pauseSeconds * 1000,
-        payout: config.payout,
+        payout: payoutNow().value,
         advice,
         force: config.alwaysSignal,
         manual: config.manual,
@@ -867,9 +1249,16 @@ async function scanTick() {
         candle: {
           ...clockInfo,
           // Fila del cierre de la ultima vela cerrada, solo si esta lectura es de fiar.
-          closeRow: formingOk && candles.length >= 2 ? -candles[candles.length - 2].close : null,
+          closeRow: formingOk && usable.length >= 2 ? -usable[usable.length - 2].close : null,
         },
+        // Vetos (15 nov 2026): anti-rebote y patrones desactivados por estadistica.
+        antiRebote: config.antiRebound,
+        vetoedPatterns: vetoedPatterns(),
       });
+      // Senales vetadas que acaban de medirse en papel: a la estadistica y al registro.
+      for (const v of last.vetoResults || []) {
+        addPatternOp(now, { pattern: v.pattern, dir: v.dir, result: v.result, kind: v.kind === 'patron' ? 'veto-patron' : 'veto-rebote' });
+      }
       // Comparacion: la misma pulsacion, pero con la senal de las reglas dada AL INSTANTE
       // (sin esperar a la IA). No se muestra como senal; solo se mide, para saber que conviene.
       if (config.manual) {
@@ -886,7 +1275,7 @@ async function scanTick() {
           entryMs: entryMs(),
           cycleMs: config.cycleSeconds * 1000,
           pauseMs: 0,
-          payout: config.payout,
+          payout: payoutNow().value,
           force: config.alwaysSignal,
           manual: true,
         });
@@ -911,7 +1300,7 @@ async function scanTick() {
         // La vela actual se sigue con la lectura de ESTE instante siempre que la linea del precio
         // pase por su cierre (eso solo le pasa a la vela en curso de verdad). No espera a que las
         // velas cerradas esten verificadas: si no, el marcador se quedaba atras en cada cierre.
-        const liveCurrent = priceY !== null && check.forming && candles.length >= 3;
+        const liveCurrent = pixelPriceY !== null && check.forming && candles.length >= 3;
         // Solo se marca la vela EN CURSO de verdad, la de esta lectura. Si no esta a la vista
         // (grafica movida hacia atras, o algo la tapa) no se marca una vela vieja: el marcador se
         // oculta y se avisa.
@@ -1019,8 +1408,20 @@ async function scanTick() {
         lastSignalAt = now;
         // Ultimo campo: "cierre:N" = la senal vale hasta el cierre de la vela (le faltaban N s).
         const until = last.untilClose ? `cierre:${Math.round((last.remainingMs || 0) / 100) / 10}` : '';
-        record(`S,${now},${last.signal.dir || 'wait'},${last.signal.source},${last.signal.confidence},${config.cycleSeconds},${regime && regime.kind ? regime.kind : ''},${until}`);
-        openSignal = { dir: last.signal.dir, confidence: last.signal.confidence, filled: false };
+        // Los dos ultimos campos (15 nov): patron de la senal y, si quedo vetada, que veto fue.
+        const setup = last.signal.pattern ? last.signal.pattern.key : '';
+        const veto = last.signal.veto;
+        record(`S,${now},${last.signal.dir || 'wait'},${last.signal.source},${last.signal.confidence},${config.cycleSeconds},${regime && regime.kind ? regime.kind : ''},${until},${setup},${veto ? veto.kind : ''}`);
+        openSignal = { dir: last.signal.dir, confidence: last.signal.confidence, filled: false, pattern: setup || 'otro' };
+        // Cada veto queda en el registro con su motivo:
+        //   E,ms,veto anti-rebote,lado,patron,velas:N cuerpos:a/b x despues:N retroceso:N % extremo
+        //   E,ms,veto patron,lado,patron,motivo
+        if (veto && veto.kind === 'anti-rebote') {
+          const d = veto.data || {};
+          record(`E,${now},veto anti-rebote,${veto.dir},${veto.pattern},velas:${d.velas} cuerpos:${(d.cuerpos || []).join('/')}x despues:${d.despues} retroceso:${d.retroceso}% ${d.extremo || ''}`);
+        } else if (veto) {
+          record(`E,${now},veto patron,${veto.dir},${veto.pattern},${String(veto.text).replace(/[,\r\n]+/g, ' ')}`);
+        }
         if (last.entry) record(`E,${now},zona-entrada,${last.entry.text}`);
         if (photoOnSignal && last.signal.dir) {
           photoOnSignal = false;
@@ -1029,7 +1430,11 @@ async function scanTick() {
       } else if (previousPhase === 'signal' && last.phase !== 'signal' && last.lastResult) {
         record(`R,${now},${last.lastResult.replace(/,/g, ' ')}`);
         // Acierto medido por nivel de confianza (solo senales con lado).
-        if (openSignal && openSignal.dir) countConfidence(openSignal.confidence, last.lastResult);
+        if (openSignal && openSignal.dir) {
+          countConfidence(openSignal.confidence, last.lastResult);
+          // Estadistica por patron: patron, pago de este momento y resultado (linea P del registro).
+          addPatternOp(now, { pattern: openSignal.pattern, dir: openSignal.dir, result: last.lastResult, kind: 'op' });
+        }
         openSignal = null;
         // Justo ahora la plataforma dibuja el globo del resultado: se guardan dos imagenes de la
         // zona para poder revisar despues por que un globo se conto o no.
@@ -1070,6 +1475,12 @@ async function scanTick() {
           record(`A,${now},${id},${answer.dir || 'wait'},${answer.confidence || ''},${plain(answer.reason)}`);
         }
         if (last.signal) record(`M,${now},${plain(last.signal.reason)}`);
+        // K,ms,segundos de vela,o/h/l/c;...  las ultimas 24 velas en precios reales (si hay cotizacion):
+        // con esto se puede repasar despues cualquier regla sobre las velas exactas de cada senal.
+        if (axis && axis.anchored) {
+          const q = (value) => axis.at(-value).toFixed(axis.decimals);
+          record(`K,${now},${clockInfo && clockInfo.seconds ? clockInfo.seconds : ''},${usable.slice(-24).map((c) => `${q(c.open)}/${q(c.high)}/${q(c.low)}/${q(c.close)}`).join(';')}`);
+        }
         {
           const closed = usable.slice(0, -1);
           const live = usable[usable.length - 1];
@@ -1152,6 +1563,9 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.on('closed', () => {
     win = null;
+    // Sin el panel no queda nada que ver: se cierra tambien la ventana (oculta) de la fuente interna.
+    quitting = true;
+    app.quit();
   });
 }
 
@@ -1188,6 +1602,10 @@ ipcMain.on('set-region', (_e, rect) => {
   goodCandles = null;
   longCandles = [];
   panel = null;
+  feedMap = null; // otra zona: la fuente interna se vuelve a ubicar
+  feedPeriod = 0;
+  feedMisses = 0;
+  feedLastBucket = null;
   publish();
 });
 
@@ -1215,6 +1633,7 @@ ipcMain.on('set-cycle', (_e, value) => {
   saveConfig();
   flushRecord();
   loadConfidenceStats(); // el porcentaje de confianza es por plazo
+  loadPatternStats(); // y la estadistica por patron tambien
   resetTrackers();
   publish('Cambió el tiempo: marcador en cero');
 });
@@ -1264,6 +1683,9 @@ ipcMain.on('set-asset', (_e, value) => {
     marketMemory.setAsset(config.asset);
     memoryInfo = null;
   }
+  feedMap = null; // otro par: la fuente interna se vuelve a ubicar
+  feedPeriod = 0;
+  feedMisses = 0;
   publish();
 });
 
@@ -1272,6 +1694,42 @@ ipcMain.on('set-always', (_e, value) => {
   config.alwaysSignal = Boolean(value);
   saveConfig();
   publish();
+});
+
+// Vetar (true) o no los patrones con mala estadistica (se siguen midiendo igual).
+ipcMain.on('set-pattern-veto', (_e, value) => {
+  config.patternVeto = Boolean(value);
+  saveConfig();
+  publish();
+});
+
+// Veto anti-rebote: no dar senal a favor de una vertical recien hecha.
+ipcMain.on('set-anti-rebound', (_e, value) => {
+  config.antiRebound = Boolean(value);
+  saveConfig();
+  publish();
+});
+
+// Fuente interna de precios y velas (terminal demo). Apagada, todo sale de los pixeles.
+ipcMain.on('set-internal-source', (_e, value) => {
+  config.internalSource = Boolean(value);
+  saveConfig();
+  if (config.internalSource) createVisor();
+  else closeVisor();
+  publish();
+});
+
+// Muestra u oculta la ventana de la terminal demo (para elegir ahi el mismo par que se opera).
+ipcMain.on('toggle-visor', () => {
+  if (!visor || visor.isDestroyed()) {
+    if (config.internalSource) createVisor();
+    if (!visor) return;
+  }
+  if (visor.isVisible()) visor.hide();
+  else {
+    visor.show();
+    visor.focus();
+  }
 });
 
 // ---------- IA: claves de ChatGPT (openai), Gemini y Claude ----------
@@ -1369,10 +1827,16 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     loadConfig();
     loadConfidenceStats();
+    loadPatternStats();
     createWindow();
+    createVisor(); // fuente interna: terminal demo en una ventana oculta
     setInterval(scanTick, SCAN_INTERVAL_MS);
     setInterval(checkPhotoRequest, 1000);
+    setInterval(readVisorPayout, 3000);
     setInterval(flushRecord, 5000);
+    app.on('before-quit', () => {
+      quitting = true; // ahora si se cierra la ventana de la fuente interna
+    });
     app.on('before-quit', flushRecord);
     record(`V,${Date.now()},${BUILD}`); // desde aqui, lo que se registre es de esta version
     marketMemory = createMarketMemory(path.join(app.getPath('userData'), 'memoria'));

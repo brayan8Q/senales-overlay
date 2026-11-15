@@ -72,6 +72,59 @@ La que mejor le ha funcionado al autor, en EUR/USD OTC de Pocket Option:
 - **Foto real con el panel**: ⚙ → «Guardar captura» deja `capturas\HHMMSS_pantalla.png`. Las
   capturas normales no ven el panel porque se oculta para no leerse a sí mismo.
 
+## Mejoras del 15 de noviembre de 2026 (rama `mejoras-15nov`)
+
+Tres cambios. Ninguno manda órdenes ni toca una cuenta: el panel sigue siendo solo un lector.
+
+### 1. Estadística por patrón (sustituye al % de confianza como criterio)
+
+- Cada señal se clasifica por la situación de la gráfica que la disparó (`patternOf` en `src/formations.js`):
+  **rompimiento**, **rechazo en extremo**, **tendencia / escalera**, **reversa / capitulación**, **rango / chop** u **otro**.
+- Cada operación medida queda en el registro con su patrón, el pago de ese momento y el resultado:
+  `P,ms,patrón,lado,resultado,pago,fuente del pago,segundos,tipo`.
+- El número grande junto a la señal es ahora el **acierto medido de ese patrón** (últimas 100 operaciones, al
+  mismo plazo), con sus operaciones y su P&L apostando 1 por operación. La tabla completa está en el detalle (▾).
+- **Auto-veto**: un patrón con 20 o más operaciones decididas y acierto por debajo de su punto de equilibrio
+  (según el pago real promedio) queda *desactivado por estadística*: el panel dice ESPERAR y lo explica. Se
+  sigue midiendo en papel y se reactiva solo si mejora. Se apaga en ⚙ («Vetar patrones con mala estadística»).
+  Aviso: con 20 operaciones el margen de error es de unos ±22 puntos; puede apagar un patrón por mala racha.
+
+### 2. Veto anti-rebote (`src/rebound.js`)
+
+- Si las últimas 2 o más velas son grandes (cuerpo ≥ 1.5 veces el promedio de las últimas 20), del mismo color
+  y marcaron el máximo o mínimo de 20 velas, **no se da señal en esa misma dirección**, digan lo que digan las
+  reglas y las IA.
+- Se permite si hay estructura de continuación: una base de 3 o más velas tras la vertical que ya se rompió, o
+  un retroceso superficial (< 38 %) con vela de confirmación. Deja de aplicar si el precio ya devolvió 38 % o
+  más, o pasadas 6 velas.
+- Cada bloqueo queda en el registro (`E,ms,veto anti-rebote,lado,patrón,velas… cuerpos… retroceso…`) y la señal
+  bloqueada se mide en papel (`P,…,veto-rebote`): el detalle del panel dice cuántas habrían ganado y perdido.
+- Se apaga en ⚙ («Anti-rebote»).
+
+### 3. Precios y velas de los datos internos de la página (`src/feed.js`, `src/pricemap.js`)
+
+- El panel abre, **oculta**, la terminal demo pública de Pocket Option (sin iniciar sesión) y solo **escucha**
+  lo que esa página recibe: el precio dos veces por segundo con su hora exacta y el historial. Con eso arma las
+  velas de la duración que haga falta, esté como esté la gráfica de esa terminal.
+- La pantalla se sigue leyendo para saber **dónde dibujar** y para comprobar que la gráfica de la pantalla y
+  los datos internos son la misma (si no cuadran, no se usan). Los números (velas, precio, reloj de la vela,
+  empates por precio exacto) salen de la fuente interna.
+- Si la fuente interna lleva más de 5 s sin datos, está en otro par o no cuadra, el panel **vuelve solo a los
+  píxeles**. Arriba del panel se ve la fuente activa (`INTERNA` / `PÍXELES`), la edad del último dato y el pago.
+- La terminal demo recuerda su par; si está en otro, el panel le deja anotado el del campo «Activo» y la recarga.
+- El **pago real** se lee de esa terminal y es el que se usa para el punto de equilibrio y el P&L.
+- Con la gráfica tapada (un aviso, un globo) el panel sigue dando y calificando señales hasta 30 s.
+- Se apaga en ⚙ («Leer precios de la fuente interna»). «Ver / ocultar fuente interna» muestra esa ventana.
+- Antes de usarlo con una cuenta, revisa las reglas de la plataforma sobre programas que leen su página.
+
+### Validación con el registro real (`node tools/validar-historico.js`)
+
+Rearma las velas de 15 s con el precio registrado y aplica las mismas funciones del panel a las señales ya
+medidas. Con el registro del 11 al 14 de noviembre: de 318 señales cortas, solo 58 tenían precio continuo en
+las 22 velas anteriores. El anti-rebote habría bloqueado 5 (1 ganadora, 4 perdedoras); exigiendo solo 12 velas
+previas, 7 (4 ganadoras, 3 perdedoras). Es muy poco para concluir; por eso cada veto se mide en papel. Desde
+esta versión cada señal guarda sus 24 velas exactas (línea `K`), así la validación ya no depende de rearmarlas.
+
 ## Cómo abrirlo
 
 Doble clic en `iniciar.bat`, o en una terminal dentro de esta carpeta:
@@ -563,3 +616,7 @@ npm test   # lector de velas (sobre una captura real), señal y marcador
 - `src/capture.js`: captura de pantalla y recorte de la zona.
 - `renderer/`: el panel.
 - `test/grafica.html` y `test/gen.js`: gráfica de ejemplo para pruebas.
+- `src/rebound.js`: veto anti-rebote (vertical de velas grandes en un extremo y sus excepciones).
+- `src/feed.js`: fuente interna: lee los mensajes de la terminal demo y arma precio, velas y reloj.
+- `src/pricemap.js`: puente entre los precios de la fuente interna y las filas de la pantalla.
+- `tools/validar-historico.js`: repasa el registro real con el anti-rebote y la estadística por patrón.

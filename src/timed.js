@@ -24,7 +24,8 @@
  * ya esta muy extendida no se da senal a su favor: el movimiento ya ocurrio.
  */
 const { trendSignal, candlePattern, climax } = require('./signal');
-const { findFormation } = require('./formations');
+const { findFormation, patternOf } = require('./formations');
+const { antiRebound } = require('./rebound');
 const { summarize } = require('./score');
 const { sameCandles } = require('./tracker');
 const { suggestZone } = require('./entry');
@@ -302,6 +303,8 @@ function createTimedTracker() {
   let ticks = []; // lecturas recientes de la linea de precio: { time, value, reference }
   let lastGood = null; // ultima lectura buena: { time, priceY, completed }
   let lastResult = '';
+  // Senales vetadas que se siguen midiendo en papel: { kind, dir, pattern, mark, time, dueAt }
+  let shadows = [];
 
   /**
    * Marca el precio de ahora. De dos maneras, la que se pueda:
@@ -340,7 +343,10 @@ function createTimedTracker() {
     if (!mark || priceY === null) return null;
     if (mark.abs !== null && quote) {
       const change = quote.value - mark.abs;
-      if (Math.abs(change) < quote.perPixel / 2) return 'flat'; // menos de medio pixel
+      // Tolerancia del empate: medio pixel cuando el precio se lee de la pantalla; con la fuente
+      // interna (precio exacto) la da quien llama (`quote.tolerance`).
+      const tolerance = Number.isFinite(quote.tolerance) ? quote.tolerance : quote.perPixel / 2;
+      if (Math.abs(change) < tolerance) return 'flat';
       return change > 0 ? 'up' : 'down';
     }
     if (!mark.reference) return null;
@@ -418,6 +424,10 @@ function createTimedTracker() {
      *        senal se mide desde ese momento y durante cycleMs (el tramo que de verdad se opera).
      * @param {boolean} [input.align]  Modo manual: PREDECIR se alinea con el cambio de vela y la
      *        senal vale hasta el CIERRE de esa vela (se califica ahi, contra el precio de la senal).
+     * @param {boolean} [input.antiRebote]  Veto anti-rebote: no dar senal a favor de una vertical
+     *        recien hecha (ver rebound.js). La senal vetada queda en ESPERAR y se mide en papel.
+     * @param {Object<string,string>} [input.vetoedPatterns]  Patrones desactivados por estadistica:
+     *        { clave: motivo }. Una senal de esos patrones queda en ESPERAR y se mide en papel.
      * @param {{known:boolean, seconds:number, elapsedMs:number|null, remainingMs:number|null,
      *          closedNow:boolean, closeRow:number|null}} [input.candle]  Reloj de la vela en curso
      *        (ver candleclock.js). closedNow = acaba de cerrar una vela; closeRow = fila del cierre
@@ -445,6 +455,8 @@ function createTimedTracker() {
       waitNext = true, // con `align`: esperar a que abra la vela siguiente si la actual ya va avanzada
       suggest = false, // zona de entrada sugerida: dos lineas entre las que esta bien entrar (ver entry.js)
       candle = null,
+      antiRebote = false,
+      vetoedPatterns = null,
     }) {
       const completed = candles.slice(0, -1);
       const aligned = Boolean(align) && manual; // solo con el boton PREDECIR
@@ -539,6 +551,23 @@ function createTimedTracker() {
         pending = null;
         observed = false; // toca analizar antes de la siguiente
         armed = false; // en modo manual hay que volver a pulsar
+      }
+
+      // 1b) Senales VETADAS (anti-rebote o patron desactivado): no se mostraron, pero se miden en
+      //     papel al mismo plazo, para saber que habria pasado y para que un patron pueda reactivarse.
+      const vetoResults = [];
+      if (shadows.length) {
+        shadows = shadows.filter((s) => {
+          if (now < s.dueAt) return true;
+          let result = null;
+          if (clean) {
+            const move = moveSince(s.mark, priceY, completed, quote);
+            result = move === null ? 'sin medir' : move === 'flat' ? 'empate' : move === s.dir ? 'acertó' : 'falló';
+          } else if (now - s.dueAt > SCORE_MAX_WAIT_MS) result = 'sin medir';
+          if (result === null) return true;
+          vetoResults.push({ kind: s.kind, dir: s.dir, pattern: s.pattern, time: s.time, result });
+          return false;
+        });
       }
 
       // 2) Termina el analisis: se anota hacia donde se movio el precio mientras tanto.
@@ -662,6 +691,33 @@ function createTimedTracker() {
               reason = `No se persigue un movimiento agotado: ${spent.text}. Espero la señal de giro.`;
             }
           }
+          // PATRON de la senal y VETOS (15 nov 2026). El patron es la situacion de la grafica que
+          // disparo la senal (formations.js). Dos vetos pueden dejarla en ESPERAR, mande quien
+          // mande (reglas o IA, tambien con "dar siempre un lado"):
+          //   - anti-rebote: no entrar a favor de una vertical recien hecha (rebound.js);
+          //   - patron desactivado por estadistica (lo decide quien llama, con lo medido).
+          // La senal vetada no se muestra, pero se mide en papel al mismo plazo (paso 1b).
+          const setup = patternOf({ candles, dir });
+          let veto = null;
+          if (dir && antiRebote) {
+            const check = antiRebound({ candles, dir });
+            if (check.veto) veto = { kind: 'anti-rebote', dir, pattern: setup.key, text: check.reason, data: check.data };
+          }
+          if (dir && !veto && vetoedPatterns && vetoedPatterns[setup.key]) {
+            veto = {
+              kind: 'patron',
+              dir,
+              pattern: setup.key,
+              text: `Patrón desactivado por estadística: ${setup.text} (${vetoedPatterns[setup.key]}). La señal era ${dir === 'up' ? 'ARRIBA' : 'ABAJO'}.`,
+              data: null,
+            };
+          }
+          if (veto) {
+            shadows.push({ kind: veto.kind, dir, pattern: setup.key, mark, time: now, dueAt: now + cycleMs });
+            reason = veto.text;
+            dir = null;
+            confidence = 'ninguna';
+          }
           // Con el reloj de la vela en hora, la senal vale hasta el cierre de la vela en curso y se
           // mide contra el precio de este instante. Sin reloj (aun no se sabe cuanto dura la vela)
           // no se promete un cierre que no se puede ubicar: esa senal se califica a los cycleMs.
@@ -702,6 +758,8 @@ function createTimedTracker() {
               readings: rules.readings,
               source: useAi ? 'ia' : 'reglas',
               braked, // el freno para la IA cambio o bajo esta senal
+              pattern: setup, // { key, text, detail }: situacion de la grafica que disparo la senal
+              veto, // null, o { kind: 'anti-rebote'|'patron', dir, pattern, text, data }: la senal quedo en ESPERAR
               untilClose,
             },
           };
@@ -764,6 +822,8 @@ function createTimedTracker() {
         readings,
         formation: status === 'ok' ? findFormation(completed) : null, // figura de varias velas, si hay
         live: summarize(live, payout),
+        // Senales vetadas que acaban de medirse en papel: [{ kind, dir, pattern, time, result }]
+        vetoResults,
         visible: null, // el repaso por velas no aplica a este modo
       };
     },
@@ -789,6 +849,7 @@ function createTimedTracker() {
       observed = false;
       armed = false;
       waiting = null;
+      shadows = [];
     },
   };
 }

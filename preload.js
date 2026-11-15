@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld('senales', {
   setManual: (value) => ipcRenderer.send('set-manual', value),
   setInstant: (value) => ipcRenderer.send('set-instant', value),
   setAsset: (value) => ipcRenderer.send('set-asset', value),
+  setPatternVeto: (value) => ipcRenderer.send('set-pattern-veto', value),
+  setAntiRebound: (value) => ipcRenderer.send('set-anti-rebound', value),
+  setInternalSource: (value) => ipcRenderer.send('set-internal-source', value),
+  toggleVisor: () => ipcRenderer.send('toggle-visor'),
   // provider: 'openai' (ChatGPT), 'gemini' o 'claude'
   aiSetKey: (key, provider) => ipcRenderer.send('ai-set-key', key, provider),
   aiClear: (provider) => ipcRenderer.send('ai-clear', provider),

@@ -115,4 +115,102 @@ function findFormation(candles) {
   return null;
 }
 
-module.exports = { findFormation, threeSoldiers, eveningStar, doubleTop, flip };
+// ---------- PATRON de una senal (15 nov 2026) ----------
+// Cada senal se clasifica segun la situacion de la grafica que la disparo, para medir despues
+// cuales patrones aciertan de verdad (ver patternStats en score.js). Se mira en este orden:
+//
+//   reversa     La senal va CONTRA una vertical reciente (2+ velas grandes que marcaron extremo,
+//               ver rebound.js) o contra una escalera de velas: apuesta al regreso.
+//   rompimiento La senal va A FAVOR de una vertical (persiguiendola, o tras romper la base que
+//               le siguio), o el precio esta mas alla de todo lo visto en las 20 velas previas.
+//   rechazo     La vela en curso o la ultima cerrada toco el extremo de las ultimas 20 y dejo una
+//               mecha larga (la mitad o mas de su rango); la senal se aleja de ese extremo.
+//   tendencia   Escalera: de las ultimas 4 velas cerradas, 3 o mas son del color de la senal y
+//               van haciendo maximos y minimos cada vez mas altos (o mas bajos).
+//   rango       Las ultimas 10 velas caben en 4 velas tipicas y casi no avanzaron, o el color
+//               cambio 5 o mas veces en 8 velas.
+//   otro        Nada de lo anterior.
+//
+// Aviso honesto: son definiciones practicas, no leyes; por eso lo que cuenta es lo medido.
+const { findVertical, antiRebound } = require('./rebound');
+
+const PATTERNS = {
+  rompimiento: 'rompimiento',
+  rechazo: 'rechazo en extremo',
+  tendencia: 'tendencia / escalera',
+  reversa: 'reversa / capitulación',
+  rango: 'rango / chop',
+  otro: 'otro',
+};
+const PATTERN_KEYS = Object.keys(PATTERNS);
+const colorOf = (c) => (c.dir === 'up' || c.dir === 'down' ? c.dir : c.close > c.open ? 'up' : c.close < c.open ? 'down' : 'flat');
+
+/** Escalera hacia arriba en las ultimas 4 velas cerradas. */
+function staircaseUp(closed) {
+  const last = closed.slice(-4);
+  if (last.length < 4) return false;
+  const greens = last.filter((c) => colorOf(c) === 'up').length;
+  let steps = 0;
+  for (let i = 1; i < last.length; i++) if (last[i].high > last[i - 1].high && last[i].low > last[i - 1].low) steps++;
+  return greens >= 3 && steps >= 2;
+}
+
+/**
+ * Patron de una senal hacia `dir`.
+ * @param {{candles:Array, dir:'up'|'down'|null}} input  Velas (la ultima en curso) y lado de la senal.
+ * @returns {{key:string, text:string, detail:string}}
+ */
+function patternOf({ candles, dir }) {
+  const as = (key, detail = '') => ({ key, text: PATTERNS[key], detail });
+  if (!dir || !candles || candles.length < 10) return as('otro');
+  // Se escribe una sola vez, para una senal hacia ARRIBA: si es hacia abajo, se voltea la grafica.
+  const list = dir === 'up' ? candles : flip(candles);
+  const closed = list.slice(0, -1);
+  const forming = list[list.length - 1];
+  const unit = median(closed.slice(-LOOKBACK).map((c) => c.high - c.low));
+
+  // 1) Vertical reciente.
+  const vertical = findVertical(list);
+  if (vertical) {
+    if (vertical.dir === 'down') return as('reversa', `contra una vertical de ${vertical.length} velas`);
+    const check = antiRebound({ candles: list, dir: 'up' });
+    if (check.veto) return as('rompimiento', `persigue una vertical de ${vertical.length} velas`);
+    if (check.allowed === 'base') return as('rompimiento', 'rompió la base que siguió a una vertical');
+    if (check.allowed === 'pullback') return as('tendencia', 'retroceso superficial y confirmación tras una vertical');
+    // 'profundo': el precio ya devolvio buena parte; se sigue con las reglas de abajo.
+  }
+
+  // 2) Rechazo en extremo: mecha larga en el minimo de las ultimas 20 (la senal sube desde ahi).
+  for (const index of [list.length - 1, list.length - 2]) {
+    const c = list[index];
+    const before = list.slice(Math.max(0, index - LOOKBACK), index);
+    if (!c || before.length < 8) continue;
+    const range = c.high - c.low;
+    const wick = Math.min(c.open, c.close) - c.low;
+    if (c.low <= Math.min(...before.map((b) => b.low)) && range >= unit * 0.5 && wick >= range * 0.5) {
+      return as('rechazo', 'mecha larga en el extremo de 20 velas');
+    }
+  }
+
+  // 3) Escalera a favor (tendencia) o en contra (reversa).
+  if (staircaseUp(closed)) return as('tendencia', 'escalera de velas a favor');
+  if (staircaseUp(flip(closed))) return as('reversa', 'contra una escalera de velas');
+
+  // 4) Rompimiento: el precio esta por encima de todo lo visto en las 20 velas previas a la ultima cerrada.
+  const prior = closed.slice(-(LOOKBACK + 1), -1);
+  if (prior.length >= 8 && forming.close > Math.max(...prior.map((c) => c.high))) return as('rompimiento', 'precio fuera del rango de 20 velas');
+
+  // 5) Rango / chop.
+  const ten = closed.slice(-10);
+  if (ten.length >= 8) {
+    const span = Math.max(...ten.map((c) => c.high)) - Math.min(...ten.map((c) => c.low));
+    const net = Math.abs(ten[ten.length - 1].close - ten[0].open);
+    const eight = closed.slice(-8).map(colorOf);
+    let changes = 0;
+    for (let i = 1; i < eight.length; i++) if (eight[i] !== eight[i - 1]) changes++;
+    if ((span <= unit * 4 && net <= unit * 1.5) || changes >= 5) return as('rango', changes >= 5 ? 'velas alternadas' : 'precio encerrado');
+  }
+  return as('otro');
+}
+
+module.exports = { findFormation, threeSoldiers, eveningStar, doubleTop, flip, patternOf, PATTERNS, PATTERN_KEYS };
