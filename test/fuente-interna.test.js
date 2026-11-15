@@ -68,7 +68,7 @@ function advance(at) {
 
 const rowOf = (price) => Math.round(H / 2 - price * PX);
 const xOf = (index) => 20 + index * 24;
-function draw({ blank = false, mirror = false, blob = false, mark = false, text = false } = {}) {
+function draw({ blank = false, mirror = false, blob = false, mark = false, text = false, hideForming = false } = {}) {
   const rgba = Buffer.alloc(W * H * 4);
   for (let p = 0; p < rgba.length; p += 4) {
     rgba[p] = BG[0];
@@ -88,6 +88,8 @@ function draw({ blank = false, mirror = false, blob = false, mark = false, text 
   for (let x = 0; x < W; x++) paint(x, rowOf(m * market.price), LINE);
   const list = [...market.closed.slice(-VISIBLE), market.forming];
   list.forEach((c, i) => {
+    // Una vela que acaba de abrir no tiene cuerpo: en la pantalla no se ve (solo la línea del precio).
+    if (hideForming && i === list.length - 1) return;
     const up = mirror ? c.close <= c.open : c.close >= c.open;
     const color = up ? GREEN : RED;
     const x0 = xOf(i);
@@ -658,6 +660,112 @@ test('bot en DEMO: si rechaza la orden, el panel espera tu entrada a mano; y sin
   fakeBot.state = { online: false, connected: false, demo: null, balance: null };
   handlers['set-entry-wait'](null, 0);
   handlers['set-martin'](null, 0);
+});
+
+test('la vela en curso se sigue por su hora: aunque no esté dibujada, el marcador no se regresa; números arriba del margen', async () => {
+  let s = null;
+  for (let i = 0; i < 6; i++) ({ s } = await read());
+  assert.equal(s.source.active, 'INTERNA');
+  const formingX = () => 2 + xOf(Math.min(market.closed.length, VISIBLE));
+  assert.equal(s.scan.current.x, formingX());
+  // Regla: un número por vela, seguidos, y el de la vela en curso resaltado (sale de la hora de la vela).
+  const numbers = s.scan.ruler.map((m) => m.n);
+  assert.equal(numbers.length, s.scan.candles.length);
+  for (let i = 1; i < numbers.length; i++) assert.equal(numbers[i], (numbers[i - 1] + 1) % 100, 'números seguidos');
+  assert.equal(s.scan.ruler[numbers.length - 1].current, true);
+  assert.equal(s.scan.ruler.filter((m) => m.current).length, 1);
+  assert.equal(s.scan.byTime, true);
+  const serial = Math.floor(market.startedAt / CANDLE_MS) % 100;
+  assert.equal(numbers[numbers.length - 1], serial, 'el número de la vela en curso sale de su hora');
+  // La vela en curso deja de verse (sin cuerpo). Antes el marcador se regresaba a la vela anterior.
+  let closes = 0;
+  for (let i = 0; i < 9; i++) {
+    const step = await read({ hideForming: true });
+    if (step.closedNow) closes++;
+    if (closes) break; // (el cambio de vela se comprueba abajo, con la vela a la vista)
+    assert.ok(step.s.scan.current, `lectura ${i}: hay marcador`);
+    assert.equal(step.s.scan.current.x, formingX(), `lectura ${i}: el marcador sigue en la vela en curso, no en la anterior`);
+    const ruler = step.s.scan.ruler;
+    assert.equal(ruler[ruler.length - 1].n, serial);
+    assert.equal(ruler[ruler.length - 1].current, true);
+    assert.equal(step.s.scan.missing, false);
+  }
+  // Al abrir la vela siguiente el número sube en uno (nunca baja).
+  let before = null;
+  for (;;) {
+    const step = await read();
+    const ruler = step.s.scan.ruler;
+    const n = ruler[ruler.length - 1].n;
+    if (step.closedNow && before !== null) {
+      assert.equal(n, (before + 1) % 100);
+      break;
+    }
+    if (before !== null) assert.equal(n, before);
+    before = n;
+  }
+});
+
+test('automático con el bot: predice y opera solo; sin la gráfica confirmada se queda en espera', async () => {
+  handlers['set-entry-wait'](null, 5);
+  handlers['set-martin'](null, 0);
+  fakeBot.state = { online: true, connected: true, demo: true, balance: 1000 };
+  fakeBot.orders.length = 0;
+  fakeBot.finish = null;
+  let s = null;
+  for (let i = 0; i < 6; i++) ({ s } = await read());
+  assert.equal(s.source.active, 'INTERNA');
+  handlers['set-manual'](null, false); // "Predecir solo, sin botón"
+  // Sin pulsar nada: analiza, da señales y las que traen lado las abre el bot. Pocket contesta "ganó".
+  let open = 0;
+  let signals = 0;
+  let previous = 'idle';
+  for (let i = 0; i < 500 && fakeBot.orders.length < 2; i++) {
+    ({ s } = await read());
+    if (s.phase === 'signal' && previous !== 'signal') signals++;
+    previous = s.phase;
+    if (fakeBot.finish) {
+      if (++open >= 11) {
+        fakeBot.finish('win', 0.92);
+        fakeBot.finish = null;
+        open = 0;
+      }
+    }
+  }
+  assert.ok(signals >= 1, 'dio señales sin pulsar PREDECIR'); // (sin pausa de análisis, una señal sigue a la otra)
+  assert.ok(fakeBot.orders.length >= 2, `el bot abrió ${fakeBot.orders.length} operaciones solo`);
+  assert.ok(fakeBot.orders.every((o) => o.level === 0 && o.seconds === 3 && o.asset === 'EUR/USD OTC'));
+  if (fakeBot.finish) {
+    for (let i = 0; i < 11; i++) await read();
+    fakeBot.finish('win', 0.92);
+    fakeBot.finish = null;
+  }
+  for (let i = 0; i < 4; i++) ({ s } = await read());
+  // En pantalla aparece OTRA gráfica: el automático se queda en espera (no predice a ciegas ni manda órdenes).
+  for (let i = 0; i < 12; i++) ({ s } = await read({ mirror: true }));
+  assert.equal(s.source.active, 'PÍXELES');
+  assert.equal(s.bot.hold, true);
+  const sent = fakeBot.orders.length;
+  let phases = new Set();
+  for (let i = 0; i < 60; i++) {
+    ({ s } = await read({ mirror: true }));
+    if (i > 20) phases.add(s.phase);
+  }
+  assert.equal(fakeBot.orders.length, sent, 'en espera no se manda nada al bot');
+  assert.deepEqual([...phases], ['idle'], 'en espera no analiza ni da señales');
+  // Vuelve la gráfica del par: sigue solo.
+  for (let i = 0; i < 200 && fakeBot.orders.length === sent; i++) ({ s } = await read());
+  assert.ok(fakeBot.orders.length > sent, 'al volver la gráfica, sigue operando solo');
+  // Se deja como estaba para las pruebas siguientes.
+  handlers['set-manual'](null, true);
+  if (fakeBot.finish) {
+    for (let i = 0; i < 11; i++) await read();
+    fakeBot.finish('win', 0.92);
+    fakeBot.finish = null;
+  }
+  for (let i = 0; i < 40 && state().phase !== 'idle'; i++) await read();
+  assert.equal(state().phase, 'idle');
+  fakeBot.state = { online: false, connected: false, demo: null, balance: null };
+  handlers['set-entry-wait'](null, 0);
 });
 
 test('si la terminal está en otro par, el panel la pone sola en el par que se opera', async () => {

@@ -268,6 +268,7 @@ function renderScan(s) {
   // siguiente) solo se sigue la vela actual: sin haz ni recuadros.
   $('scan').classList.toggle('follow', scan.mode === 'follow');
   renderCurrentCandle(scan.current);
+  renderRuler(scan);
   renderEntry(scan);
   const state = scan.verified ? 'lectura verificada ✓' : 'verificando lectura…';
   const saved = scan.saved ? ` · ${scan.saved} en memoria` : '';
@@ -282,6 +283,24 @@ function renderScan(s) {
     const what = s.signal && s.signal.source === 'martingala' ? 'LA MARTINGALA' : 'LA SEÑAL';
     label.textContent = `ESCANEANDO ${what}${going} · ${state}${rate}`;
   } else label.textContent = `SIGUIENDO LA VELA ACTUAL · ${state}${rate}`;
+}
+
+/**
+ * Regla de arriba del margen: el número de cada vela. La vela en curso va resaltada; su número solo
+ * crece (con la fuente interna sale de la hora de la vela), así se ve que el seguimiento no retrocede.
+ */
+function renderRuler(scan) {
+  const ruler = $('scan-ruler');
+  const marks = scan.ruler || [];
+  while (ruler.children.length > marks.length) ruler.lastChild.remove();
+  while (ruler.children.length < marks.length) ruler.appendChild(document.createElement('span'));
+  marks.forEach((mark, i) => {
+    const el = ruler.children[i];
+    el.textContent = String(mark.n).padStart(2, '0');
+    el.className = mark.current ? 'current' : '';
+    el.style.left = `${mark.x + mark.w / 2}px`;
+  });
+  ruler.title = scan.byTime ? 'Número de cada vela según su hora (fuente interna).' : 'Número de cada vela, contando los cierres vistos.';
 }
 
 /** Coloca un elemento del escáner (en puntos, relativos a la zona). */
@@ -644,7 +663,10 @@ api.onState((s) => {
     let text = `Bot DEMO${money}`;
     let cls = 'on';
     const o = b.order;
-    if (o && o.state === 'sending') text = 'Bot DEMO · abriendo la operación…';
+    if (b.hold && !o) {
+      text = 'Bot DEMO · automático en espera: pon a la vista la gráfica del par';
+      cls = 'warn';
+    } else if (o && o.state === 'sending') text = 'Bot DEMO · abriendo la operación…';
     else if (o && (o.state === 'open' || o.state === 'done')) text = `Bot DEMO · entró con $${Number(o.amount).toFixed(2)} · paga ${o.payout} %${o.level ? ` · martingala ${o.level}` : ''}`;
     else if (o && o.error) {
       text = `Bot DEMO · no entró: ${o.error}`;

@@ -119,6 +119,7 @@ let levels = null; // { estado, soporte, resistencia, tipica } de la ultima lect
 const liveClock = createCandleClock();
 let clockInfo = null;
 let missingReads = 0; // lecturas seguidas en las que la vela en curso no esta a la vista
+let candleSerial = 0; // numero de la vela en curso cuando se lee por pixeles (crece con cada cierre)
 // ---------- Registro en disco ----------
 // Guarda el precio real leido (cuando el eje esta a la vista) y cada senal con su resultado, en
 // %APPDATA%\senales-overlay\registro\AAAA-MM-DD.csv. Sirve para simular con datos de verdad:
@@ -651,7 +652,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -735,6 +736,8 @@ function botPause() {
   if (sourceInfo.active !== 'INTERNA') return 'no confirmo que la gráfica sea de ese par (fuente interna inactiva)';
   return '';
 }
+/** Automatico en espera: el bot esta abierto pero no se puede confirmar el par en la pantalla. */
+const autoHold = () => !config.manual && config.autoTrade && bot.status().online && sourceInfo.active !== 'INTERNA';
 /** Manda al bot la senal (o martingala) que acaba de salir. */
 function sendToBot(signal, now) {
   const order = { signal, state: 'sending', sentAt: now, level: signal.martin || 0, dir: signal.dir, error: '' };
@@ -752,6 +755,9 @@ function sendToBot(signal, now) {
       order.amount = opened.amount;
       // La orden entro entre que se mando y que Pocket la confirmo: se toma el punto medio.
       order.enteredAt = Math.round((opened.sent_ms + opened.open_ms) / 2);
+      // Pocket cierra en un segundo entero de su reloj: una operacion "de 3 s" dura 3 s menos la
+      // fraccion del segundo en que entro. El bot dice cuando cierra; el panel cuenta hasta ahi.
+      order.closeAt = Number.isFinite(opened.close_ms) ? opened.close_ms : null;
       record(`O,${Date.now()},abierta,${opened.id},${opened.open_price},${opened.payout},${opened.amount},${opened.open_ms - opened.sent_ms}`);
       return bot.result(opened.id, config.cycleSeconds).then((done) => {
         if (!done || !done.ok) throw new Error((done && done.error) || 'sin resultado del bot');
@@ -1100,6 +1106,7 @@ function publish(statusOverride) {
     follow: last.follow || null,
     // Bot en DEMO: si esta disponible, por que no opera (si no opera) y como va su orden de esta senal.
     bot: {
+      hold: autoHold(), // automatico en espera: no se confirma el par en la pantalla
       enabled: config.autoTrade,
       online: bot.status().online,
       balance: bot.status().balance,
@@ -1371,7 +1378,9 @@ async function scanTick() {
         userEntered = false;
         if ((mine.state === 'open' || mine.state === 'done') && !mine.told) {
           mine.told = true;
-          userEntered = { price: mine.openPrice, agoMs: Math.max(0, now - mine.enteredAt) };
+          const span = config.cycleSeconds * 1000;
+          const left = mine.closeAt ? mine.closeAt - now : null; // lo que falta para el cierre que dio Pocket
+          userEntered = { price: mine.openPrice, agoMs: left !== null && left > 0 && left <= span ? span - left : Math.max(0, now - mine.enteredAt) };
         }
         externalAwait = mine.state === 'open' && !mine.error;
         externalResult = mine.result || null;
@@ -1394,7 +1403,9 @@ async function scanTick() {
         payout: payoutNow().value,
         advice,
         force: config.alwaysSignal,
-        manual: config.manual,
+        // Automatico con el bot abierto: si la grafica del par no esta confirmada (fuente interna
+        // inactiva) no se predice a ciegas ni se gasta en consultas: se espera, como en manual.
+        manual: config.manual || autoHold(),
         waitForAdvice: anyAi() && anyAiBusy() && !instantMode(),
         // Con el boton PREDECIR la senal vale hasta el cierre de la vela (y, si WAIT_FOR_NEXT_CANDLE,
         // con la vela avanzada se espera a que abra la siguiente).
@@ -1477,12 +1488,18 @@ async function scanTick() {
         // La vela actual se sigue con la lectura de ESTE instante siempre que la linea del precio
         // pase por su cierre (eso solo le pasa a la vela en curso de verdad). No espera a que las
         // velas cerradas esten verificadas: si no, el marcador se quedaba atras en cada cierre.
-        const liveCurrent = pixelPriceY !== null && check.forming && candles.length >= 3;
-        // Solo se marca la vela EN CURSO de verdad, la de esta lectura. Si no esta a la vista
-        // (grafica movida hacia atras, o algo la tapa) no se marca una vela vieja: el marcador se
-        // oculta y se avisa.
-        const current = liveCurrent ? candles[candles.length - 1] : null;
+        const liveCurrent = Boolean(inner) || (pixelPriceY !== null && check.forming && candles.length >= 3);
+        // Solo se marca la vela EN CURSO de verdad. Con la fuente interna se conoce por su HORA (la del
+        // servidor), este o no dibujada todavia: una vela que acaba de abrir no tiene cuerpo, en la
+        // pantalla no se ve, y antes el marcador se regresaba a la vela anterior (15 nov 2026). El
+        // tiempo no retrocede: el marcador tampoco. Por pixeles se marca la de esta lectura; si no
+        // esta a la vista (grafica movida hacia atras, o algo la tapa) el marcador se oculta y se avisa.
+        const current = inner ? usable[usable.length - 1] : liveCurrent ? candles[candles.length - 1] : null;
         missingReads = liveCurrent || candles.length < 3 ? 0 : missingReads + 1;
+        // Numero de cada vela (arriba del margen): con la fuente interna sale de su hora, asi que es
+        // siempre el mismo para la misma vela y solo crece; por pixeles se cuenta cada cierre visto.
+        if (!inner && clockInfo && clockInfo.closedNow) candleSerial++;
+        const serialOf = (c, fromEnd) => (inner && Number.isFinite(c.time) && clockInfo && clockInfo.seconds ? Math.floor(c.time / clockInfo.seconds) : candleSerial - fromEnd);
         const inPips = (px) => (axis ? Math.round((10 * Math.abs(px) * axis.perPixel) / axis.pip) / 10 : null);
         const top = current ? Math.max(current.open, current.close) : 0;
         const bottom = current ? Math.min(current.open, current.close) : 0;
@@ -1501,6 +1518,11 @@ async function scanTick() {
           // La vela en curso no esta a la vista (se avisa a partir de la segunda lectura seguida).
           missing: missingReads >= MISSING_READS_TO_WARN,
           saved: memoryInfo ? memoryInfo.total : 0, // velas guardadas en la memoria del mercado
+          // Regla de arriba del margen: el numero de cada vela (dos cifras) y cual es la que esta en curso.
+          ruler: usable
+            .map((c, i) => ({ x: o + c.x0 / k, w: (c.x1 - c.x0 + 1) / k, n: ((serialOf(c, usable.length - 1 - i) % 100) + 100) % 100, current: i === usable.length - 1 && Boolean(current) }))
+            .filter((mark) => Number.isFinite(mark.x)),
+          byTime: Boolean(inner), // los numeros salen de la hora de cada vela (fuente interna)
           // La vela actual, al detalle: cuerpo, mechas, apertura y precio.
           current: current
             ? {
@@ -1699,7 +1721,9 @@ async function scanTick() {
       //  - Manual: al pulsar PREDECIR (empieza el analisis); la senal sale en cuanto contestan.
       if (anyAi() && !council.asked && !instantMode()) {
         const pauseMs = config.pauseSeconds * 1000;
-        const endingSoon = !config.manual && last.phase === 'signal' && last.remainingMs <= AI_LEAD_MS;
+        // (Con espera de entrada / bot, la senal no dura un tiempo fijo: a las IA se les pregunta al
+        // empezar el analisis, no "un poco antes de que termine la senal".)
+        const endingSoon = !config.manual && !config.entryWaitSeconds && last.phase === 'signal' && last.remainingMs <= AI_LEAD_MS;
         if (endingSoon || last.phase === 'analysis') {
           council.asked = true;
           let windowMs = last.remainingMs;

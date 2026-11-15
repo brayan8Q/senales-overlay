@@ -520,6 +520,8 @@ function createTimedTracker() {
           pending.mark = entry;
           pending.time = now - (exact && Number.isFinite(exact.agoMs) ? exact.agoMs : ENTRY_SEEN_LAG_MS);
           pending.enteredAt = now;
+          pending.entryMs = 0; // ya entro: no hay retraso de entrada que sumar ni otra marca que tomar
+          pending.entered = true;
           if (pending.entry) {
             pending.entry.mark = entry; // la linea de referencia pasa al precio de la entrada real
             pending.entry.filled = true;

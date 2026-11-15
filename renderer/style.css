@@ -403,3 +403,7 @@ html, body {
 #bot-chip { margin: 0 0 5px; padding: 2px 6px; border-radius: 6px; font-size: 9px; font-weight: 700; line-height: 1.25; color: #9ca3af; background: rgba(255, 255, 255, .06); }
 #bot-chip.on { color: #bae6fd; background: rgba(56, 189, 248, .16); }
 #bot-chip.warn { color: #fcd34d; background: rgba(245, 158, 11, .16); }
+/* ---------- 15 nov 2026: números de las velas arriba del margen ---------- */
+#scan-ruler { position: absolute; top: 2px; left: 0; right: 0; height: 14px; pointer-events: none; }
+#scan-ruler span { position: absolute; top: 0; transform: translateX(-50%); padding: 0 3px; border-radius: 3px; font-size: 9px; font-weight: 800; line-height: 13px; color: #bae6fd; background: rgba(15, 23, 42, .72); transition: left .09s linear; }
+#scan-ruler span.current { color: #111827; background: #fde047; font-size: 11px; line-height: 15px; box-shadow: 0 0 8px rgba(253, 224, 71, .8); }
