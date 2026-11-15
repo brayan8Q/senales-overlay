@@ -399,3 +399,7 @@ html, body {
 /* ---------- 15 nov 2026: dos etapas (espera de entrada / operación en curso) ---------- */
 #signal-follow.entry { background: #38bdf8; color: #0b1220; font-size: 11px; }
 #progress.entry #progress-fill { background: #38bdf8; }
+/* ---------- 15 nov 2026: bot en DEMO ---------- */
+#bot-chip { margin: 0 0 5px; padding: 2px 6px; border-radius: 6px; font-size: 9px; font-weight: 700; line-height: 1.25; color: #9ca3af; background: rgba(255, 255, 255, .06); }
+#bot-chip.on { color: #bae6fd; background: rgba(56, 189, 248, .16); }
+#bot-chip.warn { color: #fcd34d; background: rgba(245, 158, 11, .16); }

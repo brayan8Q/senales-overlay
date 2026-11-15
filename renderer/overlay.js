@@ -132,6 +132,7 @@ $('internal-source').addEventListener('change', (e) => api.setInternalSource(e.t
 $('btn-visor').addEventListener('click', () => api.toggleVisor());
 $('martin').addEventListener('change', (e) => api.setMartin(Number(e.target.value)));
 $('entry-wait').addEventListener('change', (e) => api.setEntryWait(Number(e.target.value)));
+$('auto-trade').addEventListener('change', (e) => api.setAutoTrade(e.target.checked));
 
 // IA: tres proveedores, cada uno con su clave. Los de ChatGPT conservan sus ids de siempre.
 const AI_BLOCKS = [
@@ -568,7 +569,8 @@ api.onState((s) => {
   line.classList.toggle('hidden', !awaiting && (!follow || !follow.state));
   if (awaiting) {
     line.className = 'entry';
-    line.textContent = `ESPERANDO TU ENTRADA · ${Math.ceil(awaiting.leftMs / 1000)} s`;
+    const byBot = s.bot && s.bot.order && s.bot.order.state === 'sending';
+    line.textContent = byBot ? 'EL BOT ESTÁ ENTRANDO…' : `ESPERANDO TU ENTRADA · ${Math.ceil(awaiting.leftMs / 1000)} s`;
   } else if (follow && follow.state) {
     if (follow.next) {
       line.className = 'alert';
@@ -630,6 +632,30 @@ api.onState((s) => {
       : s.internalSource
         ? `Leyendo los píxeles de la pantalla porque ${src.detail}.`
         : 'Leyendo los píxeles de la pantalla (la fuente interna está apagada en ⚙).';
+  }
+
+  // --- Bot en DEMO: disponible, en pausa (y por qué) o qué hizo con la orden de esta señal ---
+  const botChip = $('bot-chip');
+  const b = s.bot;
+  // Solo se muestra si el bot está abierto (o si acaba de fallar una orden): sin bot, el panel es el de siempre.
+  botChip.classList.toggle('hidden', !b || s.cycleSeconds === 0 || (!b.online && !(b.order && b.order.error)));
+  if (b) {
+    const money = b.balance === null ? '' : ` · saldo $${Number(b.balance).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+    let text = `Bot DEMO${money}`;
+    let cls = 'on';
+    const o = b.order;
+    if (o && o.state === 'sending') text = 'Bot DEMO · abriendo la operación…';
+    else if (o && (o.state === 'open' || o.state === 'done')) text = `Bot DEMO · entró con $${Number(o.amount).toFixed(2)} · paga ${o.payout} %${o.level ? ` · martingala ${o.level}` : ''}`;
+    else if (o && o.error) {
+      text = `Bot DEMO · no entró: ${o.error}`;
+      cls = 'warn';
+    } else if (b.pause) {
+      text = `Bot DEMO en pausa · ${b.pause}`;
+      cls = b.enabled ? 'warn' : '';
+    }
+    botChip.textContent = text;
+    botChip.className = cls;
+    botChip.title = 'Bot de Pocket en la cuenta DEMO (trader\\pocket_tyl\\lector.py). Abre la operación de cada señal y de su martingala; el panel cuenta desde esa entrada y usa el resultado de Pocket.';
   }
 
   // --- Estadística por patrón y lo medido del veto anti-rebote (en el detalle) ---
@@ -734,6 +760,7 @@ api.onState((s) => {
   $('always').checked = s.alwaysSignal;
   if (document.activeElement !== $('martin')) $('martin').value = s.martinLevels === undefined ? 1 : s.martinLevels;
   if (document.activeElement !== $('entry-wait')) $('entry-wait').value = s.entryWaitSeconds === undefined ? 5 : s.entryWaitSeconds;
+  $('auto-trade').checked = !s.bot || s.bot.enabled !== false;
   $('pattern-veto').checked = s.patternVeto !== false;
   $('anti-rebound').checked = s.antiRebound !== false;
   $('internal-source').checked = s.internalSource !== false;

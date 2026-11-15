@@ -147,6 +147,21 @@ Tres cambios. Ninguno manda órdenes ni toca una cuenta: el panel sigue siendo s
 - Límite: la marca se ve unas décimas después de la entrada real (se compensa con 0.4 s fijos), así que el
   cierre del panel y el de la plataforma pueden diferir por décimas. Solo funciona con la gráfica a la vista.
 
+### 6. Fusión con el bot de Pocket, solo en DEMO (`src/botbridge.js`)
+
+- El panel decide y un proceso aparte (el bot, en otra carpeta: `trader\pocket_tyl\lector.py`) abre la operación en la
+  cuenta **DEMO** de Pocket Option. Se hablan dentro de la misma computadora (127.0.0.1) con una clave que el bot
+  deja en su carpeta mientras está abierto.
+- Al salir una señal con lado (o su martingala), el panel se la manda al bot: par (campo «Activo»), lado, segundos y
+  nivel. El bot contesta con el **precio y la hora exactos de la entrada**, el **pago real de esa operación** y, al
+  cerrar, el **resultado que da Pocket**. Con eso el panel cuenta el plazo, decide la martingala y llena el registro.
+- Montos: los pone el bot (por defecto $1 la señal y $2.20 su martingala, una sola). El panel no maneja dinero.
+- Seguros: solo se usa si el bot dice que su cuenta es DEMO; solo con la fuente interna activa (prueba de que la
+  gráfica de la pantalla es del par de «Activo»); una operación a la vez. Si el bot no está abierto, rechaza la
+  orden o no contesta, el panel sigue como sin bot (espera tu entrada a mano).
+- Arriba del panel: «Bot DEMO · saldo…», «entró con $1.00 · paga 52 %», o por qué está en pausa.
+- En ⚙, «Que el bot abra las operaciones (DEMO)». Registro: líneas `O` (enviada, abierta, resultado, fallo, bot).
+
 ### Validación con el registro real (`node tools/validar-historico.js`)
 
 Rearma las velas de 15 s con el precio registrado y aplica las mismas funciones del panel a las señales ya
@@ -650,4 +665,5 @@ npm test   # lector de velas (sobre una captura real), señal y marcador
 - `src/feed.js`: fuente interna: lee los mensajes de la terminal demo y arma precio, velas y reloj.
 - `src/pricemap.js`: puente entre los precios de la fuente interna y las filas de la pantalla.
 - `src/ordermark.js`: reconoce la marca de una operación abierta (para saber cuándo entró el usuario).
+- `src/botbridge.js`: puente al bot de Pocket en DEMO (manda la orden, recibe entrada, pago y resultado).
 - `tools/validar-historico.js`: repasa el registro real con el anti-rebote y la estadística por patrón.

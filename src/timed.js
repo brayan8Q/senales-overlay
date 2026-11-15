@@ -70,6 +70,9 @@ const UNKNOWN_CANDLE_START_MS = 2000;
 // mas las dos lecturas seguidas que se piden para darla por buena): el plazo se cuenta desde
 // este tiempo antes de haberla confirmado.
 const ENTRY_SEEN_LAG_MS = 400;
+// Con el bot (ver botbridge.js) el resultado lo da la plataforma: al terminar el plazo se le espera
+// este tiempo antes de calificar con el precio propio.
+const EXTERNAL_WAIT_MS = 2500;
 const MARTIN_ALERT_MS = 1500;
 const MARTIN_ALERT_PART = 0.25;
 const OPPOSITE = { up: 'down', down: 'up' };
@@ -451,8 +454,13 @@ function createTimedTracker() {
      *        cuando una senal pierde (0 = ninguna).
      * @param {number} [input.entryWaitMs]  Dos etapas: cuanto se espera a que el usuario ponga su
      *        operacion; el plazo de la senal cuenta desde que entra (0 = cuenta desde la senal).
-     * @param {boolean} [input.userEntered]  En esta lectura se vio aparecer la marca de una operacion
-     *        nueva del usuario en la grafica.
+     * @param {boolean|{price?:number, agoMs?:number}} [input.userEntered]  En esta lectura se vio
+     *        aparecer la marca de una operacion nueva del usuario en la grafica (true), o el bot
+     *        abrio la operacion: entonces viene su precio de entrada y hace cuanto entro.
+     * @param {boolean} [input.externalAwait]  La operacion la abrio el bot: su resultado lo dara la
+     *        plataforma (se le espera un poco antes de calificar con el precio propio).
+     * @param {'win'|'loss'|'tie'|null} [input.externalResult]  Resultado que dio la plataforma de
+     *        la operacion en curso: manda sobre la medicion propia.
      * @param {{known:boolean, seconds:number, elapsedMs:number|null, remainingMs:number|null,
      *          closedNow:boolean, closeRow:number|null}} [input.candle]  Reloj de la vela en curso
      *        (ver candleclock.js). closedNow = acaba de cerrar una vela; closeRow = fila del cierre
@@ -485,6 +493,8 @@ function createTimedTracker() {
       martin = 0,
       entryWaitMs = 0,
       userEntered = false,
+      externalAwait = false,
+      externalResult = null,
     }) {
       const completed = candles.slice(0, -1);
       const aligned = Boolean(align) && manual; // solo con el boton PREDECIR
@@ -503,9 +513,12 @@ function createTimedTracker() {
       if (pending && pending.stage === 'entry') {
         const entry = userEntered && clean ? markNow(priceY, completed, quote) : null;
         if (entry) {
+          // Entrada del bot: se conoce su precio exacto y hace cuanto fue (no hay que estimarlos).
+          const exact = typeof userEntered === 'object' ? userEntered : null;
+          if (exact && Number.isFinite(exact.price) && entry.abs !== null) entry.abs = exact.price;
           pending.stage = 'trade';
           pending.mark = entry;
-          pending.time = now - ENTRY_SEEN_LAG_MS;
+          pending.time = now - (exact && Number.isFinite(exact.agoMs) ? exact.agoMs : ENTRY_SEEN_LAG_MS);
           pending.enteredAt = now;
           if (pending.entry) {
             pending.entry.mark = entry; // la linea de referencia pasa al precio de la entrada real
@@ -550,6 +563,7 @@ function createTimedTracker() {
       //    ultima lectura buena (si es de ese momento) o se espera un poco a que se destape.
       let sample = null;
       let giveUp = false;
+      let verdict = null; // resultado dado por la plataforma: 'win' | 'loss' | 'tie'
       if (pending && pending.stage === 'entry') {
         // Esperando la entrada del usuario: todavia no hay nada que calificar.
       } else if (pending && pending.untilClose) {
@@ -572,17 +586,23 @@ function createTimedTracker() {
             };
           } else if (now - pending.dueAt > pending.graceMs) giveUp = true; // la grafica siguio tapada
         }
+      } else if (pending && pending.dir && externalResult) {
+        // La plataforma ya dio el resultado de esta operacion (la abrio el bot): es el que vale.
+        verdict = externalResult;
       } else if (pending && now - pending.time >= pending.spanMs + pending.entryMs) {
         const due = pending.time + pending.spanMs + pending.entryMs;
-        if (clean) {
+        if (externalAwait && pending.dir && now - due < EXTERNAL_WAIT_MS) {
+          // Termino el plazo: se espera un momento el resultado de la plataforma.
+        } else if (clean) {
           if (pending.waited && now - due > SCORE_LATE_MS) giveUp = true;
           else sample = { priceY, completed, quote };
         } else if (previousGood && previousGood.time >= due - SCORE_EARLY_MS) sample = previousGood;
         else if (now - due > SCORE_MAX_WAIT_MS) giveUp = true;
         else pending.waited = true;
       }
-      if (sample || giveUp) {
-        const move = sample ? moveSince(pending.mark, sample.priceY, sample.completed, sample.quote) : null;
+      if (sample || giveUp || verdict) {
+        let move = sample ? moveSince(pending.mark, sample.priceY, sample.completed, sample.quote) : null;
+        if (verdict) move = verdict === 'tie' ? 'flat' : verdict === 'win' ? pending.dir : OPPOSITE[pending.dir];
         remember(move);
         // Sin lado no hubo prediccion: se dice asi (antes se quedaba el resultado de la senal anterior).
         if (!pending.dir) lastResult = 'no dio predicción (sin lectura clara)';
@@ -986,4 +1006,4 @@ function createTimedTracker() {
   };
 }
 
-module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum, EARLY_CANDLE_MS, PRICE_LOST_MS, NO_SIGNAL_MS, AI_STREAK_BRAKE, ENTRY_SEEN_LAG_MS };
+module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum, EARLY_CANDLE_MS, PRICE_LOST_MS, NO_SIGNAL_MS, AI_STREAK_BRAKE, ENTRY_SEEN_LAG_MS, EXTERNAL_WAIT_MS };

@@ -57,6 +57,9 @@
     <!-- Salud de los datos: de dónde salen los números y qué tan frescos están -->
     <div id="source-chip" class="hidden"></div>
 
+    <!-- Bot en DEMO: si está abierto, opera él; si no, por qué -->
+    <div id="bot-chip" class="hidden"></div>
+
     <!-- Señal -->
     <div id="signal" class="wait">
       <div id="signal-source"></div>
@@ -157,6 +160,12 @@
       <label class="check" title="Si lo desactivas, el panel dirá ESPERAR cuando no vea una lectura clara.">
         <input id="always" type="checkbox" checked />
         <span>Dar siempre ARRIBA o ABAJO (sin ESPERAR)</span>
+      </label>
+
+      <div class="settings-title">Bot en DEMO</div>
+      <label class="check" title="Con el bot de Pocket abierto («Iniciar Pocket Lector.bat», cuenta DEMO), cada señal y su martingala las abre el bot al instante. El panel cuenta el plazo desde esa entrada exacta, usa el pago real de la operación y el resultado que da Pocket. Si el bot no está abierto o rechaza la orden, el panel espera tu entrada a mano como siempre. Solo opera con la fuente interna activa (es la prueba de que la gráfica es del par de «Activo»).">
+        <input id="auto-trade" type="checkbox" checked />
+        <span>Que el bot abra las operaciones (DEMO)</span>
       </label>
 
       <div class="settings-title">Filtros y fuente de datos</div>

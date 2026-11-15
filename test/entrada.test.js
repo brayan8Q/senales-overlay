@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createTimedTracker, ENTRY_SEEN_LAG_MS: LAG } = require('../src/timed');
+const { createTimedTracker, ENTRY_SEEN_LAG_MS: LAG, EXTERNAL_WAIT_MS } = require('../src/timed');
 const { chain } = require('./helpers');
 
 // DOS ETAPAS: 1) sale la señal y se espera a que el usuario ponga su operación; 2) desde que entra
@@ -122,4 +122,72 @@ test('con la espera en 0 todo cuenta desde la señal, como antes', () => {
   assert.equal(s.remainingMs, 3000);
   s = read(114, 3000);
   assert.equal(s.lastResult, 'acertó');
+});
+
+// ---------- Con el bot: la entrada y el resultado los da la plataforma ----------
+const withBot = ({ martin = 0 } = {}) => {
+  const t = createTimedTracker();
+  t.predict();
+  const read = (price, now, extra = {}) =>
+    t.update({ candles: UP, priceY: row(price), now, cycleMs: 3000, payout: 92, manual: true, martin, entryWaitMs: 5000, quote: { value: price, perPixel: 1 }, ...extra });
+  return { t, read };
+};
+
+test('bot: la entrada cuenta desde la hora exacta que da el bot y contra su precio de entrada', () => {
+  const { read } = withBot();
+  read(112, 0);
+  // El bot entró hace 250 ms, en 112.4 (el panel ve 113 en esta lectura).
+  let s = read(113, 600, { userEntered: { price: 112.4, agoMs: 250 }, externalAwait: true });
+  assert.equal(s.entryWait, null);
+  assert.equal(s.remainingMs, 3000 - 250);
+  assert.equal(s.follow.state, 'ganando'); // 113 contra 112.4, no contra 113
+  s = read(111.5, 2000, { externalAwait: true });
+  assert.equal(s.follow.state, 'perdiendo'); // 111.5 contra 112.4
+});
+
+test('bot: el resultado que da la plataforma manda, aunque el precio del panel diga otra cosa', () => {
+  const { read } = withBot();
+  read(112, 0);
+  read(112, 500, { userEntered: { price: 112, agoMs: 100 }, externalAwait: true });
+  // El panel ve el precio arriba (para él, "acertó"), pero Pocket cerró la operación como perdida.
+  const s = read(114, 3300, { externalAwait: true, externalResult: 'loss' });
+  assert.equal(s.phase, 'idle');
+  assert.equal(s.lastResult, 'falló');
+  assert.deepEqual(tally(s), [0, 1, 0]);
+});
+
+test('bot: al terminar el plazo se espera un momento el resultado de la plataforma', () => {
+  const { read } = withBot();
+  read(112, 0);
+  read(112, 500, { userEntered: { price: 112, agoMs: 0 }, externalAwait: true });
+  let s = read(114, 3600, { externalAwait: true }); // ya pasaron los 3 s, pero Pocket aún no contesta
+  assert.equal(s.phase, 'signal');
+  s = read(114, 4000, { externalAwait: true, externalResult: 'win' });
+  assert.equal(s.lastResult, 'acertó');
+  // Si la plataforma no contesta en 2.5 s, se califica con el precio propio.
+  const other = withBot();
+  other.read(112, 0);
+  other.read(112, 500, { userEntered: { price: 112, agoMs: 0 }, externalAwait: true });
+  s = other.read(111, 3500 + EXTERNAL_WAIT_MS, { externalAwait: true });
+  assert.equal(s.lastResult, 'falló');
+});
+
+test('bot: si Pocket dice que perdió, sale la martingala; si empata, no', () => {
+  const { read } = withBot({ martin: 1 });
+  read(112, 0);
+  read(112, 500, { userEntered: { price: 112, agoMs: 0 }, externalAwait: true });
+  let s = read(113, 3400, { externalAwait: true, externalResult: 'loss' });
+  assert.equal(s.lastResult, 'falló');
+  assert.equal(s.signal.source, 'martingala');
+  assert.ok(s.entryWait, 'la martingala espera su entrada (la del bot)');
+  // El resultado viejo no se le aplica a la martingala: quien llama solo lo pasa para SU operación.
+  s = read(113, 3700);
+  assert.equal(s.phase, 'signal');
+
+  const tie = withBot({ martin: 1 });
+  tie.read(112, 0);
+  tie.read(112, 500, { userEntered: { price: 112, agoMs: 0 }, externalAwait: true });
+  s = tie.read(110, 3400, { externalAwait: true, externalResult: 'tie' });
+  assert.equal(s.lastResult, 'empate');
+  assert.equal(s.phase, 'idle');
 });

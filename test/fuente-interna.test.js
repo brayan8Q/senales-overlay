@@ -191,9 +191,26 @@ const electron = {
   safeStorage: { isAsyncEncryptionAvailable: async () => false },
   desktopCapturer: { getSources: async () => [{ display_id: '1', thumbnail: fakeImage() }] },
 };
+// El bot de Pocket, de mentira: apagado salvo en la prueba que lo enciende. Guarda lo que se le pide.
+const fakeBot = {
+  state: { online: false, connected: false, demo: null, balance: null },
+  orders: [],
+  fail: null, // motivo con el que rechaza la siguiente orden
+  finish: null, // resuelve el resultado de la operación abierta
+  refresh: async () => fakeBot.state,
+  status: () => fakeBot.state,
+  order: async (payload) => {
+    fakeBot.orders.push(payload);
+    if (fakeBot.fail) return { ok: false, error: fakeBot.fail };
+    const id = `A${fakeBot.orders.length}`;
+    return { ok: true, id, asset: 'EURUSD_otc', amount: payload.level ? 2.2 : 1, open_price: feedPrice(), payout: 52, sent_ms: nowMs, open_ms: nowMs + 200 };
+  },
+  result: (id) => new Promise((resolve) => (fakeBot.finish = (result, net) => resolve({ ok: true, id, result, net, close_price: feedPrice() }))),
+};
 const realLoad = Module._load;
 Module._load = function load(request, ...rest) {
   if (request === 'electron') return electron;
+  if (/botbridge$/.test(request)) return { createBotBridge: () => fakeBot };
   return realLoad.call(this, request, ...rest);
 };
 global.setInterval = (fn, ms) => {
@@ -526,6 +543,121 @@ test('dos etapas: la señal espera tu entrada y el plazo cuenta desde que entras
   assert.equal(state().patterns.reduce((n, p) => n + p.n, 0), before, 'no se contó ninguna operación');
   assert.match(records(), /\nR,\d+,sin entrada: no vi tu operación en 5 s\n/);
   handlers['set-entry-wait'](null, 0);
+});
+
+test('bot en DEMO: abre la señal y su martingala; el panel cuenta desde su entrada y usa el resultado de Pocket', async () => {
+  handlers['set-entry-wait'](null, 5);
+  handlers['set-martin'](null, 1);
+  fakeBot.state = { online: true, connected: true, demo: true, balance: 1000 };
+  let s = null;
+  for (let i = 0; i < 6; i++) ({ s } = await read());
+  assert.equal(s.source.active, 'INTERNA');
+  assert.equal(s.bot.online, true);
+  assert.equal(s.bot.pause, '');
+  // Hasta dar con una señal con lado: en cuanto sale, se manda al bot.
+  let step = null;
+  for (;;) {
+    fakeBot.orders.length = 0;
+    handlers.predict();
+    await Promise.resolve();
+    do step = await read();
+    while (step.s.phase !== 'signal');
+    if (step.s.signal.dir) break;
+    assert.equal(fakeBot.orders.length, 0, 'un ESPERAR no se manda al bot');
+    while (step.s.phase === 'signal') step = await read();
+  }
+  const dir = step.s.signal.dir;
+  assert.deepEqual(fakeBot.orders, [{ asset: 'EUR/USD OTC', dir, seconds: 3, level: 0 }]);
+  // El bot confirma la entrada: sin esperar ninguna marca en la pantalla, la señal ya cuenta.
+  step = await read();
+  if (step.s.entryWait) step = await read();
+  assert.equal(step.s.entryWait, null);
+  assert.equal(step.s.entered, true);
+  assert.equal(step.s.bot.order.state, 'open');
+  assert.equal(step.s.bot.order.amount, 1);
+  assert.equal(step.s.bot.order.payout, 52);
+  // Pasa el plazo y Pocket aún no contesta: el panel espera su resultado.
+  for (let i = 0; i < 12; i++) step = await read();
+  assert.equal(step.s.phase, 'signal');
+  // Pocket dice que PERDIÓ: sale la martingala y también se manda al bot, con nivel 1.
+  fakeBot.finish('loss', -1);
+  step = await read();
+  if (step.s.signal.source !== 'martingala') step = await read();
+  assert.equal(step.s.lastResult, 'falló');
+  assert.equal(step.s.signal.source, 'martingala');
+  const mdir = step.s.signal.dir;
+  assert.deepEqual(fakeBot.orders[1], { asset: 'EUR/USD OTC', dir: mdir, seconds: 3, level: 1 });
+  step = await read();
+  if (step.s.entryWait) step = await read();
+  assert.equal(step.s.bot.order.level, 1);
+  assert.equal(step.s.bot.order.amount, 2.2);
+  // Pocket dice que la martingala GANÓ.
+  for (let i = 0; i < 4; i++) step = await read();
+  fakeBot.finish('win', 1.14);
+  do step = await read();
+  while (step.s.phase === 'signal');
+  assert.equal(step.s.lastResult, 'acertó');
+  assert.equal(fakeBot.orders.length, 2, 'no hubo más órdenes');
+  const log = records();
+  assert.match(log, new RegExp(`\\nO,\\d+,enviada,${dir},0\\n`));
+  assert.match(log, /\nO,\d+,abierta,A1,1\.\d+,52,1,200\n/);
+  assert.match(log, /\nO,\d+,resultado,loss,-1,1\.\d+\n/);
+  assert.match(log, new RegExp(`\\nO,\\d+,enviada,${mdir},1\\n`));
+  assert.match(log, /\nO,\d+,resultado,win,1\.14,1\.\d+\n/);
+  // El pago que queda en el registro es el de la operación del bot.
+  assert.match(log, new RegExp(`\\nP,\\d+,\\w+,${dir},loss,52,bot,3,op\\n`));
+  assert.match(log, new RegExp(`\\nP,\\d+,\\w+,${mdir},win,52,bot,3,martin1\\n`));
+});
+
+test('bot en DEMO: si rechaza la orden, el panel espera tu entrada a mano; y sin fuente interna no opera', async () => {
+  // Rechazo: queda el aviso y la señal sigue esperando la entrada del usuario.
+  fakeBot.fail = 'Pocket Option rechazó la orden: asset closed';
+  let step = null;
+  for (;;) {
+    fakeBot.orders.length = 0;
+    handlers.predict();
+    await Promise.resolve();
+    do step = await read();
+    while (step.s.phase !== 'signal');
+    if (step.s.signal.dir) break;
+    while (step.s.phase === 'signal') step = await read();
+  }
+  step = await read();
+  assert.equal(fakeBot.orders.length, 1);
+  assert.equal(step.s.bot.order.state, 'failed');
+  assert.match(step.s.bot.order.error, /asset closed/);
+  assert.ok(step.s.entryWait, 'sigue esperando la entrada a mano');
+  step = await read({ mark: true });
+  step = await read({ mark: true });
+  assert.equal(step.s.entered, true); // el usuario entró a mano y el panel lo vio
+  do step = await read({ mark: true });
+  while (step.s.phase === 'signal');
+  assert.match(records(), /\nO,\d+,fallo,Pocket Option rechazó la orden: asset closed\n/);
+  fakeBot.fail = null;
+
+  // Sin la fuente interna activa (aquí: en pantalla hay otra gráfica) el bot no opera.
+  let s = null;
+  for (let i = 0; i < 10; i++) ({ s } = await read({ mirror: true }));
+  assert.equal(s.source.active, 'PÍXELES');
+  assert.match(s.bot.pause, /no confirmo que la gráfica sea de ese par/);
+  fakeBot.orders.length = 0;
+  handlers.predict();
+  await Promise.resolve();
+  do step = await read({ mirror: true });
+  while (step.s.phase !== 'signal');
+  while (step.s.phase === 'signal') step = await read({ mirror: true });
+  assert.equal(fakeBot.orders.length, 0, 'no se mandó nada al bot');
+  for (let i = 0; i < 12; i++) ({ s } = await read());
+  assert.equal(s.source.active, 'INTERNA');
+
+  // Apagado en ajustes: tampoco.
+  handlers['set-auto-trade'](null, false);
+  ({ s } = await read());
+  assert.equal(s.bot.pause, 'apagado en ajustes');
+  handlers['set-auto-trade'](null, true);
+  fakeBot.state = { online: false, connected: false, demo: null, balance: null };
+  handlers['set-entry-wait'](null, 0);
+  handlers['set-martin'](null, 0);
 });
 
 test('si la terminal está en otro par, el panel la pone sola en el par que se opera', async () => {

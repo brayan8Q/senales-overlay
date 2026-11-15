@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('senales', {
   toggleVisor: () => ipcRenderer.send('toggle-visor'),
   setMartin: (value) => ipcRenderer.send('set-martin', value),
   setEntryWait: (value) => ipcRenderer.send('set-entry-wait', value),
+  setAutoTrade: (value) => ipcRenderer.send('set-auto-trade', value),
   // provider: 'openai' (ChatGPT), 'gemini' o 'claude'
   aiSetKey: (key, provider) => ipcRenderer.send('ai-set-key', key, provider),
   aiClear: (provider) => ipcRenderer.send('ai-clear', provider),

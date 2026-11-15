@@ -38,6 +38,7 @@ const { PATTERNS, PATTERN_KEYS } = require('./src/formations');
 const { createFeed, assetKey, PERIODS: FEED_PERIODS } = require('./src/feed');
 const { fitPriceMap, toScreen } = require('./src/pricemap');
 const { countOrderMark, MARK_MIN } = require('./src/ordermark');
+const { createBotBridge } = require('./src/botbridge');
 
 // PREDECIR con la vela ya avanzada: true = esperar a que abra la vela siguiente y analizar ahi;
 // false = analizar y predecir al momento de pulsar. El usuario pidio quitar la espera (13 nov 2026).
@@ -94,6 +95,9 @@ const config = {
   // Dos etapas: segundos que se espera a que el usuario ponga su operacion; el plazo de la senal
   // cuenta desde que entra (0 = cuenta desde que sale la senal, como antes).
   entryWaitSeconds: 5,
+  // Bot en DEMO: si el puente del bot de Pocket esta abierto (trader\pocket_tyl\lector.py), cada
+  // senal y su martingala las abre el bot en la cuenta DEMO; el panel cuenta desde esa entrada.
+  autoTrade: true,
 };
 /** Senal al instante: solo aplica cuando la prediccion se pide con el boton. */
 const instantMode = () => config.instant && config.manual;
@@ -252,9 +256,9 @@ function payoutNow() {
   return same ? { value: visorPayout.value, source: 'interna' } : { value: config.payout, source: 'config' };
 }
 /** Anota una operacion medida (mostrada o vetada) y actualiza la estadistica. */
-function addPatternOp(now, { pattern, dir, result, kind }) {
+function addPatternOp(now, { pattern, dir, result, kind, paid = null }) {
   const key = resultKey(result || '');
-  const pay = payoutNow();
+  const pay = paid || payoutNow();
   record(`P,${now},${pattern},${dir},${key || 'sin-medir'},${pay.value},${pay.source},${config.cycleSeconds},${kind}`);
   if (!key) return;
   if (kind === 'veto-rebote') {
@@ -647,7 +651,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -709,6 +713,60 @@ let entryBadges = 0; // globos de resultado a la vista en la lectura anterior
 let entryWasWaiting = false;
 let entryStageLogged = false;
 let entryStageAt = 0;
+
+// ---------- BOT EN DEMO (15 nov 2026): fusion con el bot de Pocket ----------
+// El panel decide y el bot abre la operacion en la cuenta DEMO (ver src/botbridge.js y
+// trader\pocket_tyl\lector.py). El bot contesta con el precio y la hora exactos de la entrada, el
+// pago real de esa operacion y, al cerrar, el resultado que da la plataforma: con eso se cuenta
+// el plazo y se decide la martingala. Si el bot no esta abierto, falla o rechaza la orden, el
+// panel sigue como sin bot (espera la entrada a mano).
+// Solo se manda una orden si la fuente interna esta activa: es la prueba de que la grafica de la
+// pantalla es del par escrito en "Activo" (si no, el bot operaria un par y el panel leeria otro).
+// Registro: O,ms,enviada,lado,nivel · O,ms,abierta,id,precio,pago,monto,ms · O,ms,resultado,win|loss|tie,neto,cierre · O,ms,fallo,motivo
+const bot = createBotBridge();
+let botLogged = 'false|'; // ultimo estado del bot anotado en el registro
+let botOrder = null; // orden del bot para la senal en curso: { signal, state: 'sending'|'open'|'done'|'failed', ... }
+/** Por que el bot no opera ahora ('' = puede operar). */
+function botPause() {
+  if (!config.autoTrade) return 'apagado en ajustes';
+  const status = bot.status();
+  if (!status.online) return status.connected && status.demo !== true ? 'su cuenta no es DEMO' : 'el bot no está abierto';
+  if (!config.asset) return 'falta escribir el par en «Activo»';
+  if (sourceInfo.active !== 'INTERNA') return 'no confirmo que la gráfica sea de ese par (fuente interna inactiva)';
+  return '';
+}
+/** Manda al bot la senal (o martingala) que acaba de salir. */
+function sendToBot(signal, now) {
+  const order = { signal, state: 'sending', sentAt: now, level: signal.martin || 0, dir: signal.dir, error: '' };
+  botOrder = order;
+  record(`O,${now},enviada,${order.dir},${order.level}`);
+  const plain = (text) => String(text || '').replace(/[,\r\n]+/g, ' ').slice(0, 160);
+  bot
+    .order({ asset: config.asset, dir: order.dir, seconds: config.cycleSeconds, level: order.level })
+    .then((opened) => {
+      if (!opened || !opened.ok) throw new Error((opened && opened.error) || 'sin respuesta del bot');
+      order.state = 'open';
+      order.id = opened.id;
+      order.openPrice = opened.open_price;
+      order.payout = opened.payout;
+      order.amount = opened.amount;
+      // La orden entro entre que se mando y que Pocket la confirmo: se toma el punto medio.
+      order.enteredAt = Math.round((opened.sent_ms + opened.open_ms) / 2);
+      record(`O,${Date.now()},abierta,${opened.id},${opened.open_price},${opened.payout},${opened.amount},${opened.open_ms - opened.sent_ms}`);
+      return bot.result(opened.id, config.cycleSeconds).then((done) => {
+        if (!done || !done.ok) throw new Error((done && done.error) || 'sin resultado del bot');
+        order.result = done.result;
+        order.net = done.net;
+        order.state = 'done';
+        record(`O,${Date.now()},resultado,${done.result},${done.net},${done.close_price}`);
+      });
+    })
+    .catch((err) => {
+      if (order.state === 'sending') order.state = 'failed'; // no entro: queda la entrada a mano
+      order.error = err.message;
+      record(`O,${Date.now()},fallo,${plain(err.message)}`);
+    });
+}
 
 // ---------- IA opcional: hasta tres a la vez (ChatGPT, Gemini y Claude) ----------
 // Cada clave vive cifrada en disco y en memoria; nunca se envia al panel ni se escribe en logs.
@@ -954,6 +1012,7 @@ function loadConfig() {
     if (typeof saved.internalSource === 'boolean') config.internalSource = saved.internalSource;
     if (Number.isFinite(saved.martinLevels)) config.martinLevels = Math.max(0, Math.min(3, Math.round(saved.martinLevels)));
     if (Number.isFinite(saved.entryWaitSeconds)) config.entryWaitSeconds = Math.max(0, Math.min(30, Math.round(saved.entryWaitSeconds)));
+    if (typeof saved.autoTrade === 'boolean') config.autoTrade = saved.autoTrade;
     if (Number.isFinite(saved.entryDelayMs)) config.entryDelayMs = Math.max(0, Math.min(ENTRY_MAX_MS, saved.entryDelayMs));
     if (typeof saved.asset === 'string') config.asset = saved.asset;
   } catch {
@@ -1039,6 +1098,14 @@ function publish(statusOverride) {
     rebound: reboundTally,
     // Seguimiento: como va la senal en curso, si se avisa martingala, y lo medido de las martingalas.
     follow: last.follow || null,
+    // Bot en DEMO: si esta disponible, por que no opera (si no opera) y como va su orden de esta senal.
+    bot: {
+      enabled: config.autoTrade,
+      online: bot.status().online,
+      balance: bot.status().balance,
+      pause: botPause(),
+      order: botOrder ? { state: botOrder.state, level: botOrder.level, amount: botOrder.amount || null, payout: botOrder.payout || null, error: botOrder.error || '' } : null,
+    },
     // Dos etapas: mientras se espera la entrada del usuario, cuanto le queda; y si ya entro, hace cuanto.
     entryWait: last.entryWait || null,
     entryWaitSeconds: config.entryWaitSeconds,
@@ -1295,6 +1362,20 @@ async function scanTick() {
           entryWasWaiting = true;
         }
       } else entryWasWaiting = false;
+      // Bot: si abrio la operacion de esta senal, ESA es la entrada (precio y hora exactos) y el
+      // resultado sera el que de la plataforma. Mientras el bot la esta abriendo no se mira la marca.
+      const mine = botOrder && botOrder.signal === shownSignal ? botOrder : null;
+      let externalAwait = false;
+      let externalResult = null;
+      if (mine && mine.state !== 'failed') {
+        userEntered = false;
+        if ((mine.state === 'open' || mine.state === 'done') && !mine.told) {
+          mine.told = true;
+          userEntered = { price: mine.openPrice, agoMs: Math.max(0, now - mine.enteredAt) };
+        }
+        externalAwait = mine.state === 'open' && !mine.error;
+        externalResult = mine.result || null;
+      }
       const advice = councilAdvice(now);
       last = byTime.update({
         candles: usable,
@@ -1334,6 +1415,8 @@ async function scanTick() {
         // Dos etapas: se espera la entrada del usuario y el plazo cuenta desde que entra.
         entryWaitMs: config.entryWaitSeconds * 1000,
         userEntered,
+        externalAwait,
+        externalResult,
       });
       // Registro de las dos etapas: E,ms,espera-entrada,segundos · E,ms,entro,segundos que tardo
       if (last.entryWait && !entryStageLogged) {
@@ -1501,13 +1584,15 @@ async function scanTick() {
       if (signalEnded && last.lastResult) {
         record(`R,${now},${last.lastResult.replace(/,/g, ' ')}`);
         // Acierto medido por nivel de confianza (solo senales con lado).
+        // Si la opero el bot, el pago es el de ESA operacion (el de la cuenta), no el estimado.
+        const paid = openSignal && openSignal.order && Number.isFinite(openSignal.order.payout) ? { value: openSignal.order.payout, source: 'bot' } : null;
         if (openSignal && openSignal.dir && openSignal.martin) {
           // Martingala de seguimiento: se anota aparte (tipo martin1, martin2...), no en la estadistica por patron.
-          addPatternOp(now, { pattern: openSignal.pattern, dir: openSignal.dir, result: last.lastResult, kind: `martin${openSignal.martin}` });
+          addPatternOp(now, { pattern: openSignal.pattern, dir: openSignal.dir, result: last.lastResult, kind: `martin${openSignal.martin}`, paid });
         } else if (openSignal && openSignal.dir) {
           countConfidence(openSignal.confidence, last.lastResult);
           // Estadistica por patron: patron, pago de este momento y resultado (linea P del registro).
-          addPatternOp(now, { pattern: openSignal.pattern, dir: openSignal.dir, result: last.lastResult, kind: 'op' });
+          addPatternOp(now, { pattern: openSignal.pattern, dir: openSignal.dir, result: last.lastResult, kind: 'op', paid });
         }
         openSignal = null;
         // Justo ahora la plataforma dibuja el globo del resultado: se guardan dos imagenes de la
@@ -1523,6 +1608,12 @@ async function scanTick() {
         const veto = last.signal.veto;
         record(`S,${now},${last.signal.dir || 'wait'},${last.signal.source},${last.signal.confidence},${config.cycleSeconds},${regime && regime.kind ? regime.kind : ''},${until},${setup},${veto ? veto.kind : ''}`);
         openSignal = { dir: last.signal.dir, confidence: last.signal.confidence, filled: false, pattern: setup || 'otro', martin: last.signal.martin || 0 };
+        // Bot en DEMO: la senal (o su martingala) se manda al bot, que abre la operacion.
+        botOrder = null;
+        if (last.signal.dir && last.entryWait && !botPause()) {
+          sendToBot(last.signal, now);
+          openSignal.order = botOrder;
+        }
         // E,ms,martingala,nivel,lado: entrada de seguimiento porque la senal anterior perdio.
         if (last.signal.martin) record(`E,${now},martingala,${last.signal.martin},${last.signal.dir}`);
         // Cada veto queda en el registro con su motivo:
@@ -1808,6 +1899,13 @@ ipcMain.on('set-martin', (_e, value) => {
   publish();
 });
 
+// Bot en DEMO: que el bot abra las operaciones (si su puente esta abierto) o solo marcar la senal.
+ipcMain.on('set-auto-trade', (_e, value) => {
+  config.autoTrade = Boolean(value);
+  saveConfig();
+  publish();
+});
+
 // Dos etapas: segundos de espera de entrada (0 = el plazo cuenta desde que sale la senal).
 ipcMain.on('set-entry-wait', (_e, value) => {
   const seconds = Math.round(Number(value));
@@ -1954,6 +2052,19 @@ if (!app.requestSingleInstanceLock()) {
     setInterval(scanTick, SCAN_INTERVAL_MS);
     setInterval(checkPhotoRequest, 1000);
     setInterval(readVisorPayout, 3000);
+    // Estado del bot de Pocket (si esta abierto). Cada cambio queda en el registro:
+    //   O,ms,bot,disponible|no disponible,saldo,motivo
+    setInterval(() => {
+      bot
+        .refresh()
+        .then((status) => {
+          const key = `${status.online}|${status.error || ''}`;
+          if (key === botLogged) return;
+          botLogged = key;
+          record(`O,${Date.now()},bot,${status.online ? 'disponible' : 'no disponible'},${status.balance === null ? '' : status.balance},${String(status.error || '').replace(/[,\r\n]+/g, ' ')}`);
+        })
+        .catch(() => {});
+    }, 2500);
     setInterval(flushRecord, 5000);
     app.on('before-quit', () => {
       quitting = true; // ahora si se cierra la ventana de la fuente interna
