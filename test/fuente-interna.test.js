@@ -68,7 +68,7 @@ function advance(at) {
 
 const rowOf = (price) => Math.round(H / 2 - price * PX);
 const xOf = (index) => 20 + index * 24;
-function draw({ blank = false, mirror = false } = {}) {
+function draw({ blank = false, mirror = false, blob = false } = {}) {
   const rgba = Buffer.alloc(W * H * 4);
   for (let p = 0; p < rgba.length; p += 4) {
     rgba[p] = BG[0];
@@ -97,6 +97,8 @@ function draw({ blank = false, mirror = false } = {}) {
     const bodyTop = Math.min(rowOf(m * c.open), rowOf(m * c.close));
     const bodyBottom = Math.max(rowOf(m * c.open), rowOf(m * c.close));
     for (let y = bodyTop; y <= bodyBottom; y++) for (let x = x0; x < x0 + 15; x++) paint(x, y, color);
+    // "Globo" de la plataforma: alarga hacia arriba el cuerpo de una vela cerrada (la deforma).
+    if (blob && i === list.length - 4) for (let y = bodyTop - 14; y < bodyTop; y++) for (let x = x0; x < x0 + 15; x++) paint(x, y, color);
   });
   return rgba;
 }
@@ -341,6 +343,18 @@ test('con la gráfica tapada el panel sigue dando y calificando señales con la 
   assert.match(s.status, /^Leyendo \d+ velas$/);
 });
 
+test('una vela deformada un momento (el globo de la operación) no suelta la fuente interna', async () => {
+  let s = null;
+  const before = records().split('\nF,').length;
+  for (let i = 0; i < 12; i++) {
+    ({ s } = await read({ blob: true }));
+    assert.equal(s.source.active, 'INTERNA', `lectura ${i}: ${s.source.detail}`);
+  }
+  for (let i = 0; i < 4; i++) ({ s } = await read());
+  assert.equal(s.source.active, 'INTERNA');
+  assert.equal(records().split('\nF,').length, before, 'la fuente no cambió ni una vez');
+});
+
 test('si la fuente interna deja de actualizar más de 5 s, vuelve sola a los píxeles y avisa', async () => {
   feedOn = false;
   let s = null;
@@ -369,7 +383,7 @@ test('si lo que llega no cuadra con la gráfica de la pantalla, la fuente intern
   for (let i = 0; i < 10; i++) ({ s } = await read({ mirror: true })); // en pantalla hay OTRA gráfica
   assert.equal(s.source.active, 'PÍXELES');
   assert.equal(s.source.code, 'no-cuadra');
-  assert.match(s.source.detail, /no coincide con la gráfica/);
+  assert.match(s.source.detail, /no coincide con la gráfica de la pantalla: si cambiaste de par/);
   // Y al volver a verse la gráfica correcta, se recupera sola.
   for (let i = 0; i < 12; i++) ({ s } = await read());
   assert.equal(s.source.active, 'INTERNA');
@@ -401,6 +415,21 @@ test('si la terminal está en otro par, el panel la pone sola en el par que se o
   await readPayout();
   assert.equal(terminal.scripts.filter((code) => code.includes('po-td-asset')).length, 0);
   nowMs -= 21000;
+});
+
+test('el pago de la terminal solo se usa si la fuente interna cuadró con la pantalla hace poco', async () => {
+  await readPayout();
+  const { s } = await read();
+  assert.equal(s.source.active, 'INTERNA');
+  assert.deepEqual(s.payoutNow, { value: 58, source: 'interna' });
+  // Pasa un minuto sin que la fuente interna vuelva a cuadrar con la pantalla (aquí, porque dejó de
+  // dar datos; lo mismo si en la pantalla se cambió de par): aunque la terminal siga mostrando su
+  // pago, recién leído, ya no se usa. Vale el que está escrito en el panel.
+  nowMs += 61000;
+  await readPayout();
+  await scanTick();
+  assert.notEqual(state().source.active, 'INTERNA');
+  assert.deepEqual(state().payoutNow, { value: 92, source: 'config' });
 });
 
 test('apagar la fuente interna en ajustes deja todo en píxeles', async () => {

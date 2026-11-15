@@ -582,7 +582,7 @@ api.onState((s) => {
     if (internal) text += ` · ${src.ageSeconds === null ? '—' : src.ageSeconds.toFixed(1)} s`;
     else if (s.internalSource) {
       // En corto (el detalle completo va en la ayuda al pasar el ratón).
-      const SHORT = { 'otro-par': 'interna en otro par', 'no-cuadra': /no coincide/.test(src.detail) ? 'interna no coincide' : 'interna en espera', 'pocas-velas': 'interna con pocas velas' };
+      const SHORT = { 'otro-par': 'interna en otro par', 'no-cuadra': /no coincide/.test(src.detail) ? 'interna no coincide: ¿otro par? ponlo en Activo (⚙)' : 'interna en espera', 'pocas-velas': 'interna con pocas velas' };
       text += src.warn ? ` · interna sin datos${src.ageSeconds !== null ? ` hace ${Math.round(src.ageSeconds)} s` : ''}` : ` · ${SHORT[src.code] || src.detail}`;
     }
     if (s.payoutNow) text += ` · pago ${s.payoutNow.value} %${s.payoutNow.source === 'interna' ? ' (demo)' : ''}`;

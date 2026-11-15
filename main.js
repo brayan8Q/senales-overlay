@@ -232,10 +232,15 @@ let reboundTally = { wins: 0, losses: 0, ties: 0 };
 const resultKey = (text) => (/^acert/.test(text) ? 'win' : /^fall/.test(text) ? 'loss' : /^empate/.test(text) ? 'tie' : null);
 // Pago que muestra la terminal demo para el par (fuente interna): { value, at, symbol }.
 let visorPayout = null;
+let internalSeenAt = 0; // ultima vez que la fuente interna cuadro con la grafica de la pantalla
 /** Pago de este momento: el de la fuente interna si se conoce y es del mismo par; si no, el escrito en el panel. */
 function payoutNow() {
-  const fresh = visorPayout && Date.now() - visorPayout.at <= 15000;
-  const same = fresh && (!config.asset || assetKey(visorPayout.symbol) === assetKey(config.asset));
+  const now = Date.now();
+  const fresh = visorPayout && now - visorPayout.at <= 15000;
+  // Solo si la fuente interna cuadro con la grafica de la pantalla hace poco: si en la pantalla
+  // hay otro par, el pago de la terminal demo es de otro activo y no se usa.
+  const confirmed = internalSeenAt && now - internalSeenAt <= 60000;
+  const same = fresh && confirmed && (!config.asset || assetKey(visorPayout.symbol) === assetKey(config.asset));
   return same ? { value: visorPayout.value, source: 'interna' } : { value: config.payout, source: 'config' };
 }
 /** Anota una operacion medida (mostrada o vetada) y actualiza la estadistica. */
@@ -369,12 +374,16 @@ function internalView(now, candles, pixelsOk) {
     const hint = memoryInfo && memoryInfo.candleSeconds ? memoryInfo.candleSeconds : 0;
     const periods = feedPeriod ? [feedPeriod] : [...new Set([hint, ...FEED_PERIODS].filter(Boolean))];
     let best = null;
+    let gross = true; // ninguna duracion se parece siquiera a lo que hay en pantalla
     for (const period of periods) {
       const candidate = query(period);
       const bad = unusable(candidate);
       if (bad !== undefined) return bad;
       const fit = fitPriceMap(candles, candidate);
       if (fit && fit.valid && (!best || fit.rms < best.fit.rms)) best = { fit, snap: candidate };
+      // Casi cuadra (error de hasta 3 veces lo tolerado): la grafica es la misma, pero algo la
+      // deforma un momento (la linea de la operacion abierta, el globo del resultado).
+      if (fit && fit.B > 0 && fit.rms <= fit.tolerance * 3) gross = false;
     }
     if (best) {
       const xs = candles.map((c) => c.x0);
@@ -391,16 +400,21 @@ function internalView(now, candles, pixelsOk) {
       };
       snap = best.snap;
       fitted = true;
-    } else if (++feedMisses >= FEED_MISSES_TO_DROP) {
-      feedMap = null;
-      feedPeriod = 0; // se vuelve a buscar la duracion: quiza cambio la temporalidad
+    } else if (gross || !feedMap) {
+      if (++feedMisses >= FEED_MISSES_TO_DROP) {
+        feedMap = null;
+        feedPeriod = 0; // se vuelve a buscar la duracion: quiza cambio la temporalidad o el par
+      }
     }
+    // (Desajuste leve con recta reciente: se sigue con la recta anterior, hasta 30 s.)
   }
   if (!feedMap || now - feedMap.at > GOOD_CANDLES_MS) {
     feedMap = null;
     return off(
       'no-cuadra',
-      feedMisses >= FEED_MISSES_TO_DROP ? 'la fuente interna no coincide con la gráfica de la pantalla (¿otro par u otra temporalidad?)' : 'la fuente interna espera a ver bien la gráfica para ubicarse',
+      feedMisses >= FEED_MISSES_TO_DROP
+        ? 'la fuente interna no coincide con la gráfica de la pantalla: si cambiaste de par, escríbelo en «Activo» (⚙)'
+        : 'la fuente interna espera a ver bien la gráfica para ubicarse',
     );
   }
   if (!snap) {
@@ -430,6 +444,7 @@ function internalView(now, candles, pixelsOk) {
   const decimals = snap.decimals || 5;
   const pip = decimals >= 4 ? 0.0001 : decimals >= 2 ? 0.01 : 10 ** -decimals;
   setSource('INTERNA', 'ok', `${snap.label} · velas de ${snap.period} s`, { ageMs: snap.ageMs });
+  internalSeenAt = now;
   return {
     candles: visible,
     closed: closedRows,
