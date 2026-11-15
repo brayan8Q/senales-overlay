@@ -36,8 +36,11 @@ html, body {
   opacity: 0; animation: scan-reveal .25s ease-out forwards;
 }
 .scan-mark.current { display: none; } /* la vela actual lleva su propio seguimiento, mas fino */
-#scan.signal #scan-marks, #scan.signal #scan-beam, #scan.signal .scan-level { display: none; }
-#scan.signal { background: transparent; }
+/* Con una señal abierta el escáner NO se detiene: el haz sigue pasando hasta que la señal termina
+   (15 nov 2026). Solo se quitan los recuadros de las velas y los niveles, para que se vea la zona de entrada. */
+#scan.signal #scan-marks, #scan.signal .scan-level { display: none; }
+#scan.signal { background: rgba(56, 189, 248, .03); }
+#scan.signal #scan-beam { opacity: .8; }
 /* En reposo (o esperando la vela siguiente) solo se sigue la vela actual y se ven los niveles */
 #scan.follow #scan-marks, #scan.follow #scan-beam { display: none; }
 #scan.follow { background: transparent; }

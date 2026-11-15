@@ -262,7 +262,8 @@ function renderScan(s) {
     $(id).querySelector('span').textContent = `${name} · ${touches} · ${level.flipped ? `invertido (${was})` : 'vigente'}`;
   }
   $('scan').classList.toggle('signal', scan.mode === 'signal');
-  // En reposo (o esperando la vela siguiente) solo se sigue la vela actual: sin haz ni recuadros.
+  // Con la señal abierta el haz sigue pasando (ver style.css). En reposo (o esperando la vela
+  // siguiente) solo se sigue la vela actual: sin haz ni recuadros.
   $('scan').classList.toggle('follow', scan.mode === 'follow');
   renderCurrentCandle(scan.current);
   renderEntry(scan);
@@ -273,7 +274,12 @@ function renderScan(s) {
   label.classList.toggle('warn', Boolean(scan.missing));
   if (scan.missing) label.textContent = 'LA VELA ACTUAL NO ESTÁ A LA VISTA';
   else if (scan.mode === 'analysis') label.textContent = `ESCANEANDO · ${scan.candles.length} velas${saved} · ${state}${rate}${who}`;
-  else label.textContent = `SIGUIENDO LA VELA ACTUAL · ${state}${rate}`;
+  else if (scan.mode === 'signal') {
+    // Con la señal abierta el escáner sigue pasando y analizando hasta que termina: se dice cómo va.
+    const going = s.follow && s.follow.state ? ` · va ${s.follow.state}` : '';
+    const what = s.signal && s.signal.source === 'martingala' ? 'LA MARTINGALA' : 'LA SEÑAL';
+    label.textContent = `ESCANEANDO ${what}${going} · ${state}${rate}`;
+  } else label.textContent = `SIGUIENDO LA VELA ACTUAL · ${state}${rate}`;
 }
 
 /** Coloca un elemento del escáner (en puntos, relativos a la zona). */

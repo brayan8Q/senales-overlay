@@ -643,7 +643,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
