@@ -463,6 +463,9 @@ function createTimedTracker() {
      *        { clave: motivo }. Una senal de esos patrones queda en ESPERAR y se mide en papel.
      * @param {number} [input.martin]  Seguimiento: cuantas martingalas seguidas se dan como mucho
      *        cuando una senal pierde (0 = ninguna).
+     * @param {number} [input.martinThinkMs]  La martingala se analiza como una prediccion nueva (IA y
+     *        reglas); a las IA se les espera este tiempo como mucho. -1 = sin analisis: al instante,
+     *        hacia donde va el precio.
      * @param {boolean} [input.newCandle]  La prediccion sale siempre al abrir una vela nueva: se
      *        analiza al final de la vela en curso y la senal aparece al abrir la siguiente.
      * @param {number} [input.entryWaitMs]  Dos etapas: cuanto se espera a que el usuario ponga su
@@ -504,6 +507,7 @@ function createTimedTracker() {
       antiRebote = false,
       vetoedPatterns = null,
       martin = 0,
+      martinThinkMs = -1,
       newCandle = false,
       entryWaitMs = 0,
       userEntered = false,
@@ -641,7 +645,7 @@ function createTimedTracker() {
         // Seguimiento: la senal perdio y quedan martingalas por dar: sale otra entrada enseguida (paso 2c).
         nextMartin = null;
         if (martin > 0 && pending.dir && lastResult === 'falló' && (pending.level || 0) < martin) {
-          nextMartin = { level: (pending.level || 0) + 1, lostDir: pending.dir };
+          nextMartin = { level: (pending.level || 0) + 1, lostDir: pending.dir, since: now };
         }
         pending = null;
         observed = false; // toca analizar antes de la siguiente
@@ -711,18 +715,45 @@ function createTimedTracker() {
         return best && limit ? { mark, best, limit, kind: 'zona', text: zone.text, filled: true, filledAt: now } : null;
       };
 
-      // 2c) SEGUIMIENTO (martingala): la senal anterior acaba de perder. Sin pausa ni consulta, sale
-      //     otra entrada en este mismo instante: hacia donde va el precio ahora; si el movimiento de
-      //     los ultimos segundos no se ve claro, hacia donde se fue el precio en la operacion perdida.
+      // 2c) SEGUIMIENTO (martingala): la senal anterior acaba de perder y toca otra entrada.
+      //   - Con `martinThinkMs` (15 nov 2026, «aplica el martingala sin entender»): la martingala se
+      //     ANALIZA como una prediccion nueva. Se consulta a las IA y se les espera ese tiempo como
+      //     mucho; el lado es el de las IA y, si no contestan o no eligen, el de las reglas del
+      //     panel con todas sus lecturas (tendencia, vela actual, tramos, niveles, patron medido).
+      //   - Sin el: como al principio, en el mismo instante y hacia donde va el precio.
+      let thinking = false; // martingala: esperando (poco) el nuevo analisis
       if (nextMartin && !pending) {
+        const smart = Number.isFinite(martinThinkMs) && martinThinkMs >= 0;
+        const waited = now - nextMartin.since;
+        const mark = status === 'ok' ? markNow(priceY, completed, quote) : null;
+        if (!mark) {
+          // No se puede leer en este instante: con analisis se reintenta un momento; sin el, no hay martingala.
+          if (smart && waited < martinThinkMs + 1500) thinking = true;
+          else nextMartin = null;
+        } else if (smart && !advice && waited < martinThinkMs) {
+          thinking = true;
+        }
+      }
+      if (nextMartin && !pending && !thinking) {
         const follow = nextMartin;
         nextMartin = null;
-        const mark = status === 'ok' ? markNow(priceY, completed, quote) : null;
+        const mark = markNow(priceY, completed, quote);
         if (mark) {
+          const smart = Number.isFinite(martinThinkMs) && martinThinkMs >= 0;
           const liveNow = tickMomentum(recentTicks, now);
-          const dir = liveNow.vote > 0 ? 'up' : liveNow.vote < 0 ? 'down' : OPPOSITE[follow.lostDir];
           const trend = trendSignal(candles);
-          const why = liveNow.vote !== 0 ? `ahora el precio va ${liveNow.text}` : `el precio se fue hacia ${dir === 'up' ? 'arriba' : 'abajo'}`;
+          let dir = liveNow.vote > 0 ? 'up' : liveNow.vote < 0 ? 'down' : OPPOSITE[follow.lostDir];
+          let why = `y ${liveNow.vote !== 0 ? `ahora el precio va ${liveNow.text}` : `el precio se fue hacia ${dir === 'up' ? 'arriba' : 'abajo'}`}.`;
+          let martinConfidence = 'baja';
+          if (smart) {
+            const live = candles[candles.length - 1];
+            const shape = formingOk ? candlePattern(live, candles[candles.length - 2], completed) : { vote: 0, text: 'tapada por un aviso de la plataforma', short: 'tapada' };
+            const rules = decide(trend, shape, moves, { force: true, fallback: dir, ticks: liveNow, context, regime, memory, formation: findFormation(completed) });
+            const useAi = Boolean(advice && advice.dir);
+            dir = useAi ? advice.dir : rules.dir || dir;
+            martinConfidence = useAi ? advice.confidence || 'media' : rules.confidence || 'baja';
+            why = `. Nuevo análisis${useAi ? ' de la IA' : ''}: ${useAi ? advice.reason : rules.reason}`;
+          }
           watching = null;
           observed = false;
           armed = false;
@@ -744,8 +775,8 @@ function createTimedTracker() {
               dir,
               trend: trend.trend,
               rsi: trend.rsi,
-              reason: `Martingala ${follow.level}: la señal ${follow.lostDir === 'up' ? 'ARRIBA' : 'ABAJO'} perdió y ${why}.`,
-              confidence: 'baja',
+              reason: `Martingala ${follow.level}: la señal ${follow.lostDir === 'up' ? 'ARRIBA' : 'ABAJO'} perdió${smart ? '' : ' '}${why}`,
+              confidence: martinConfidence,
               readings: null,
               source: 'martingala',
               martin: follow.level,
@@ -761,7 +792,7 @@ function createTimedTracker() {
       // 2d) PREDICCION AL ABRIR CADA VELA NUEVA: se espera el momento. Primero, a que a la vela en
       //     curso le falte lo que dura el analisis; ya analizado, a que abra la vela siguiente.
       let syncHold = false;
-      if (newCandle && clockKnown && !hold && !pending && !watching && status === 'ok' && (!manual || armed)) {
+      if (newCandle && clockKnown && !hold && !pending && !watching && !nextMartin && status === 'ok' && (!manual || armed)) {
         const justOpened = candle.elapsedMs !== null && candle.elapsedMs <= SYNC_OPEN_MS;
         if (!observed) {
           // El analisis solo arranca en su ventana: cuando a la vela le falta justo lo que dura.
@@ -772,7 +803,7 @@ function createTimedTracker() {
       }
 
       // 3) Sin senal ni analisis en curso: empieza lo que toque (en manual, solo si se pidio).
-      if (!hold && !syncHold && !pending && !watching && status === 'ok' && (!manual || armed)) {
+      if (!hold && !syncHold && !pending && !watching && !nextMartin && status === 'ok' && (!manual || armed)) {
         const mark = markNow(priceY, completed, quote);
         if (mark && pauseMs > 0 && !observed) {
           watching = { mark, time: now };
@@ -942,6 +973,9 @@ function createTimedTracker() {
         if (pending.stage === 'entry') remainingMs = Math.max(0, pending.waitUntil - now); // lo que queda para entrar
         else if (pending.untilClose) remainingMs = pending.dueAt || !clockKnown ? 0 : candle.remainingMs; // hasta el cierre de la vela
         else remainingMs = Math.max(0, pending.spanMs + pending.entryMs - (now - pending.time));
+      } else if (thinking) {
+        phase = 'analysis'; // la martingala se esta analizando
+        remainingMs = Math.max(0, martinThinkMs - (now - nextMartin.since));
       } else if (watching) {
         phase = 'analysis';
         remainingMs = Math.max(0, pauseMs - (now - watching.time));
@@ -978,7 +1012,9 @@ function createTimedTracker() {
               })()
             : null,
         clockKnown, // se sabe cuanto le falta a la vela (para la cuenta regresiva)
-        ready: status === 'ok' && !pending && !watching && !armed, // se puede pulsar PREDECIR
+        ready: status === 'ok' && !pending && !watching && !armed && !nextMartin, // se puede pulsar PREDECIR
+        // La martingala se esta analizando (fase 'analysis'): que nivel viene.
+        thinking: thinking && nextMartin ? nextMartin.level : 0,
         moves, // movimientos por tramos y lecturas finas (para quien opine sobre la proxima senal)
         ticks: recentTicks,
         readings,
@@ -1011,7 +1047,7 @@ function createTimedTracker() {
 
     /** Modo manual: pide una prediccion. Devuelve false si ya hay una en curso. */
     predict() {
-      if (pending || watching || armed) return false;
+      if (pending || watching || armed || nextMartin) return false;
       armed = true;
       observed = false;
       return true;

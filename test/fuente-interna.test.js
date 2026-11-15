@@ -456,7 +456,7 @@ test('seguimiento: cuando una señal pierde, el panel da la martingala en esa mi
   const log = records();
   // La señal que perdió queda cerrada con su resultado y su línea P, y enseguida la martingala.
   assert.match(log, new RegExp(`\\nR,\\d+,falló\\nP,\\d+,\\w+,${martin.lost.dir},loss,\\d+,\\w+,3,op\\n`));
-  assert.match(log, new RegExp(`\\nS,\\d+,${martin.state.signal.dir},martingala,baja,3,`));
+  assert.match(log, new RegExp(`\\nS,\\d+,${martin.state.signal.dir},martingala,\\w+,3,`)); // (la confianza sale del análisis de la martingala)
   assert.match(log, new RegExp(`\\nE,\\d+,martingala,1,${martin.state.signal.dir}\\n`));
   assert.match(log, /\nP,\d+,\w+,(up|down),(win|loss|tie),\d+,\w+,3,martin1\n/);
   // Las martingalas se cuentan aparte, no en la estadística por patrón.

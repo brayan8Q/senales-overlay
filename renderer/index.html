@@ -143,8 +143,8 @@
         <input id="entry-wait" type="number" min="0" max="30" step="1" value="5" />
       </div>
       <div class="field">
-        <label for="martin" title="Seguimiento de la señal: si una señal pierde, el panel da enseguida una martingala hacia donde va el precio en ese momento (y avisa un poco antes si va perdiendo). Aquí va cuántas seguidas como mucho. 0 = sin seguimiento. La martingala no sube el acierto: solo es otra entrada, y cada una arriesga más.">Martingalas de seguimiento (0 = no)</label>
-        <input id="martin" type="number" min="0" max="3" step="1" value="1" />
+        <label for="martin" title="Seguimiento de la señal: si una señal pierde, el panel da enseguida una martingala hacia donde va el precio en ese momento (y avisa un poco antes si va perdiendo). Aquí va cuántas seguidas como mucho (hasta 6). 0 = sin seguimiento. Cada martingala se analiza como una predicción nueva. No sube el acierto: es otra entrada, y cada una arriesga más (con el bot: $1.00, $2.20, $4.84, $10.65, $23.43).">Martingalas de seguimiento (0 = no)</label>
+        <input id="martin" type="number" min="0" max="6" step="1" value="4" />
       </div>
       <div class="field">
         <label for="payout" title="El porcentaje que la plataforma muestra como Payout para ese activo.">Pago de la plataforma (%)</label>

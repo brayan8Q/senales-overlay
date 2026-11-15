@@ -154,3 +154,96 @@ test('la martingala también trae su zona de entrada', () => {
   assert.ok(s.entry && s.entry.zone, 'trae su zona de dos líneas');
   assert.equal(s.entry.row, row(110)); // la referencia es el precio del instante de la martingala
 });
+
+// ---------- La martingala se analiza (15 nov 2026: «aplica el martingala sin entender») ----------
+const thinker = (martin = 1) => {
+  const t = createTimedTracker();
+  t.predict();
+  const read = (price, now, extra = {}) =>
+    t.update({ candles: UP, priceY: row(price), now, cycleMs: 3000, payout: 92, manual: true, martin, martinThinkMs: 2500, ...extra });
+  return { t, read };
+};
+const DOWN_IA = { dir: 'down', confidence: 'alta', reason: 'IA: giro bajista tras romper el piso' };
+
+test('analizada: al perder no entra a ciegas; se analiza (se espera a la IA) y el lado es el de la IA', () => {
+  const { t, read } = thinker();
+  read(112, 0);
+  let s = read(110, 3000); // perdió
+  assert.equal(s.lastResult, 'falló');
+  assert.equal(s.phase, 'analysis'); // todavía no hay martingala: se está analizando
+  assert.equal(s.signal, null);
+  assert.equal(s.thinking, 1);
+  assert.equal(s.remainingMs, 2500);
+  assert.equal(s.ready, false);
+  assert.equal(t.predict(), false);
+  s = read(110.5, 3600);
+  assert.equal(s.phase, 'analysis');
+  // Contesta la IA: ABAJO. La martingala sale con ese lado y su motivo.
+  s = read(111, 4400, { advice: DOWN_IA });
+  assert.equal(s.phase, 'signal');
+  assert.equal(s.signal.source, 'martingala');
+  assert.equal(s.signal.martin, 1);
+  assert.equal(s.signal.dir, 'down');
+  assert.equal(s.signal.confidence, 'alta');
+  assert.equal(s.signal.reason, 'Martingala 1: la señal ARRIBA perdió. Nuevo análisis de la IA: IA: giro bajista tras romper el piso');
+  assert.equal(s.thinking, 0);
+});
+
+test('analizada: si la IA no contesta a tiempo, deciden las reglas del panel con todas sus lecturas', () => {
+  const { read } = thinker();
+  read(112, 0);
+  read(110, 3000);
+  let s = read(110, 5400);
+  assert.equal(s.phase, 'analysis');
+  s = read(110, 5500); // 2.5 s sin respuesta
+  assert.equal(s.phase, 'signal');
+  assert.equal(s.signal.source, 'martingala');
+  assert.ok(['up', 'down'].includes(s.signal.dir));
+  assert.match(s.signal.reason, /^Martingala 1: la señal ARRIBA perdió\. Nuevo análisis: /);
+  assert.match(s.signal.reason, /velas hacia/); // el resumen de las lecturas, no solo el último movimiento
+});
+
+test('analizada: si la IA contesta "esperar", no se le espera más: deciden las reglas', () => {
+  const { read } = thinker();
+  read(112, 0);
+  read(110, 3000);
+  const s = read(110, 3300, { advice: { dir: null, confidence: 'ninguna', reason: 'IA: sin lado' } });
+  assert.equal(s.phase, 'signal');
+  assert.equal(s.signal.source, 'martingala');
+  assert.match(s.signal.reason, /Nuevo análisis: /);
+});
+
+test('analizada sin IA (0 s de espera): sale al momento, pero con el análisis de las reglas', () => {
+  const t = createTimedTracker();
+  t.predict();
+  const read = (price, now) => t.update({ candles: UP, priceY: row(price), now, cycleMs: 3000, payout: 92, manual: true, martin: 1, martinThinkMs: 0 });
+  read(112, 0);
+  const s = read(110, 3000);
+  assert.equal(s.phase, 'signal');
+  assert.equal(s.signal.source, 'martingala');
+  assert.match(s.signal.reason, /Nuevo análisis: /);
+});
+
+test('siempre: sigue hasta el tope de martingalas, cada una con su análisis', () => {
+  const { read } = thinker(4);
+  read(112, 0);
+  let now = 3000;
+  let price = 110;
+  for (let level = 1; level <= 4; level++) {
+    let s = read(price, now); // la anterior perdió: se analiza
+    assert.equal(s.thinking, level, `se analiza la martingala ${level}`);
+    now += 1000;
+    const dir = level % 2 ? 'down' : 'up';
+    s = read(price, now, { advice: { dir, confidence: 'media', reason: 'IA: prueba' } });
+    assert.equal(s.signal.martin, level);
+    assert.equal(s.signal.dir, dir);
+    // Pierde otra vez: el precio va en contra.
+    price += dir === 'down' ? 2 : -2;
+    now += 3000;
+  }
+  const s = read(price, now); // la cuarta martingala también perdió: ya no hay quinta
+  assert.equal(s.lastResult, 'falló');
+  assert.equal(s.phase, 'idle');
+  assert.equal(s.thinking, 0);
+  assert.deepEqual(tally(s), [0, 5, 0]);
+});

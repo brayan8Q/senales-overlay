@@ -598,7 +598,8 @@ api.onState((s) => {
   } else if (follow && follow.state) {
     if (follow.next) {
       line.className = 'alert';
-      line.textContent = `VA PERDIENDO · prepara MARTIN ${follow.next.dir === 'up' ? 'SUBE ▲' : 'BAJA ▼'}`;
+      // (El lado de la martingala sale de su propio análisis, al perder: aquí solo se avisa que viene.)
+      line.textContent = `VA PERDIENDO · viene MARTINGALA ${follow.next.level}`;
     } else {
       line.className = follow.state === 'ganando' ? 'win' : follow.state === 'perdiendo' ? 'lose' : '';
       line.textContent = follow.state === 'ganando' ? 'va ganando' : follow.state === 'perdiendo' ? 'va perdiendo' : 'va igual';
@@ -785,7 +786,7 @@ api.onState((s) => {
   if (document.activeElement !== $('cycle')) $('cycle').value = s.cycleSeconds;
   if (document.activeElement !== $('pause')) $('pause').value = s.pauseSeconds;
   $('always').checked = s.alwaysSignal;
-  if (document.activeElement !== $('martin')) $('martin').value = s.martinLevels === undefined ? 1 : s.martinLevels;
+  if (document.activeElement !== $('martin')) $('martin').value = s.martinLevels === undefined ? 4 : s.martinLevels;
   if (document.activeElement !== $('entry-wait')) $('entry-wait').value = s.entryWaitSeconds === undefined ? 5 : s.entryWaitSeconds;
   $('auto-trade').checked = !s.bot || s.bot.enabled !== false;
   $('new-candle').checked = s.newCandle !== false;

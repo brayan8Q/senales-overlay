@@ -44,6 +44,10 @@ const { createBotBridge } = require('./src/botbridge');
 // false = analizar y predecir al momento de pulsar. El usuario pidio quitar la espera (13 nov 2026).
 // En los dos casos la senal vale hasta el cierre de la vela en curso cuando sale.
 const WAIT_FOR_NEXT_CANDLE = false;
+// Martingala (15 nov 2026): cuantas seguidas como mucho se pueden configurar, y cuanto se espera
+// a las IA para analizarla (es una prediccion nueva, no una entrada a ciegas).
+const MARTIN_MAX_LEVELS = 6;
+const MARTIN_THINK_MS = 2500;
 // Plazos largos (1 minuto o mas, p. ej. 5 min con velas de 1 min): la senal dura EXACTAMENTE los
 // segundos puestos en "Cada senal vale", contados desde que sale, igual que el temporizador de la
 // plataforma. Por debajo de eso (operaciones de segundos) vale hasta el cierre de la vela en curso.
@@ -91,7 +95,7 @@ const config = {
   patternVeto: true, // vetar los patrones con mala estadistica (20+ operaciones bajo su punto de equilibrio)
   antiRebound: true, // no dar senal a favor de una vertical recien hecha (ver src/rebound.js)
   internalSource: true, // precios y velas de los datos internos de la terminal demo (ver src/feed.js)
-  martinLevels: 1, // seguimiento: martingalas seguidas cuando una senal pierde (0 = sin seguimiento)
+  martinLevels: 4, // seguimiento: martingalas seguidas cuando una senal pierde (0 = sin seguimiento)
   // Dos etapas: segundos que se espera a que el usuario ponga su operacion; el plazo de la senal
   // cuenta desde que entra (0 = cuenta desde que sale la senal, como antes).
   entryWaitSeconds: 5,
@@ -666,7 +670,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -1030,7 +1034,7 @@ function loadConfig() {
     if (typeof saved.patternVeto === 'boolean') config.patternVeto = saved.patternVeto;
     if (typeof saved.antiRebound === 'boolean') config.antiRebound = saved.antiRebound;
     if (typeof saved.internalSource === 'boolean') config.internalSource = saved.internalSource;
-    if (Number.isFinite(saved.martinLevels)) config.martinLevels = Math.max(0, Math.min(3, Math.round(saved.martinLevels)));
+    if (Number.isFinite(saved.martinLevels)) config.martinLevels = Math.max(0, Math.min(MARTIN_MAX_LEVELS, Math.round(saved.martinLevels)));
     if (Number.isFinite(saved.entryWaitSeconds)) config.entryWaitSeconds = Math.max(0, Math.min(30, Math.round(saved.entryWaitSeconds)));
     if (typeof saved.autoTrade === 'boolean') config.autoTrade = saved.autoTrade;
     if (typeof saved.newCandle === 'boolean') config.newCandle = saved.newCandle;
@@ -1439,6 +1443,8 @@ async function scanTick() {
         vetoedPatterns: vetoedPatterns(),
         // Seguimiento: si la senal pierde, sale una martingala en ese instante (hasta este tope).
         martin: config.martinLevels,
+        // La martingala se analiza: con IA se le espera hasta 2.5 s; sin IA deciden las reglas al momento.
+        martinThinkMs: anyAi() && !instantMode() ? MARTIN_THINK_MS : 0,
         // La prediccion sale al abrir cada vela nueva (analisis al final de la vela en curso).
         newCandle: config.newCandle,
         // Dos etapas: se espera la entrada del usuario y el plazo cuenta desde que entra.
@@ -1746,7 +1752,7 @@ async function scanTick() {
           council.asked = true;
           let windowMs = last.remainingMs;
           if (last.phase === 'signal') windowMs += pauseMs;
-          else if (config.manual) windowMs += AI_MANUAL_EXTRA_MS;
+          else if (config.manual && !last.thinking) windowMs += AI_MANUAL_EXTRA_MS; // (la martingala no espera de mas)
           // Los niveles que reciben las IA son los mismos que estan dibujados (ver readingsForAi).
           const priceNow = priceY !== null ? -priceY : forming ? forming.close : null;
           askCouncil(longCandles.length ? longCandles : usable, last.moves || [], last.ticks || [], windowMs, panel ? readingsForAi(panel.data, priceNow) : null);
@@ -1935,7 +1941,7 @@ ipcMain.on('set-always', (_e, value) => {
 // Seguimiento: cuantas martingalas seguidas se dan cuando una senal pierde (0 = ninguna).
 ipcMain.on('set-martin', (_e, value) => {
   const levels = Math.round(Number(value));
-  if (!Number.isFinite(levels) || levels < 0 || levels > 3) return;
+  if (!Number.isFinite(levels) || levels < 0 || levels > MARTIN_MAX_LEVELS) return;
   config.martinLevels = levels;
   saveConfig();
   publish();
