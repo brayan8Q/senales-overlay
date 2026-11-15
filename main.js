@@ -26,7 +26,7 @@ const { readAxis } = require('./src/axis');
 const { measureRegime } = require('./src/regime');
 const { createMarketMemory, segmentsOf, segmentCount } = require('./src/memory');
 const { costOf } = require('./src/prices');
-const { summarize, patternStats } = require('./src/score');
+const { summarize, patternStats, breakEvenOf, PATTERN_VETO_MIN } = require('./src/score');
 const { findResultBadges, viewJumped, createBadgeCounter } = require('./src/badges');
 const { MIN_CANDLES } = require('./src/signal');
 const { describeChart } = require('./src/ai');
@@ -300,11 +300,23 @@ function loadPatternStats() {
   patternTable = patternStats(patternOps);
 }
 /** Patrones desactivados ahora: { clave: motivo }, o null (ninguno, o el veto esta apagado). */
+/**
+ * Un patron queda desactivado si lleva 20+ operaciones decididas y su acierto no alcanza el punto
+ * de equilibrio con el pago DE AHORA. (15 nov, en vivo: con el pago promedio de sus operaciones
+ * pasadas se veto «rango», el mejor patron (54 %), porque en la manana el pago era de 52 %; con el
+ * pago de ese momento, 92 %, le bastaba 52.1 %. Lo que importa para decidir hoy es lo que paga hoy.)
+ */
+function patternOff(stat) {
+  if (!stat || stat.accuracy === null || stat.decided < PATTERN_VETO_MIN) return null;
+  const need = Math.round(breakEvenOf(payoutNow().value) * 1000) / 10;
+  return stat.accuracy < need ? need : null;
+}
 function vetoedPatterns() {
   if (!config.patternVeto) return null;
   const out = {};
   for (const stat of Object.values(patternTable)) {
-    if (stat.vetoed) out[stat.pattern] = `acierta ${stat.accuracy} % en ${stat.decided} operaciones y necesita ${stat.breakEven} %`;
+    const need = patternOff(stat);
+    if (need !== null) out[stat.pattern] = `acierta ${stat.accuracy} % en ${stat.decided} operaciones y con el pago de ahora necesita ${need} %`;
   }
   return Object.keys(out).length ? out : null;
 }
@@ -323,7 +335,7 @@ function patternInfo(signal) {
     pnl: stat ? stat.pnl : 0,
     breakEven: stat ? stat.breakEven : null,
     avgPayout: stat ? stat.avgPayout : null,
-    vetoed: Boolean(stat && stat.vetoed && config.patternVeto),
+    vetoed: Boolean(config.patternVeto && patternOff(stat) !== null),
   };
 }
 
@@ -654,7 +666,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -1103,7 +1115,7 @@ function publish(statusOverride) {
     // Senal vetada (anti-rebote o patron desactivado por estadistica): que veto fue y hacia donde iba.
     veto: last.signal && last.signal.veto ? { kind: last.signal.veto.kind, dir: last.signal.veto.dir } : null,
     // Tabla completa por patron (para el detalle) y lo medido en papel del veto anti-rebote.
-    patterns: PATTERN_KEYS.filter((key) => patternTable[key]).map((key) => ({ ...patternTable[key], text: PATTERNS[key], off: Boolean(patternTable[key].vetoed && config.patternVeto) })),
+    patterns: PATTERN_KEYS.filter((key) => patternTable[key]).map((key) => ({ ...patternTable[key], text: PATTERNS[key], off: Boolean(config.patternVeto && patternOff(patternTable[key]) !== null) })),
     rebound: reboundTally,
     // Seguimiento: como va la senal en curso, si se avisa martingala, y lo medido de las martingalas.
     follow: last.follow || null,

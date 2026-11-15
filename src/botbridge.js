@@ -83,7 +83,7 @@ function createBotBridge({ dir = null, request = httpRequest } = {}) {
           stake: s ? s.stake : null,
           factor: s ? s.factor : null,
           levels: s ? s.levels : null,
-          error: s && s.ok ? '' : (s && s.error) || 'el bot no contestó bien',
+          error: s && s.ok ? (s.connected ? '' : 'el bot perdió la conexión con Pocket (se reconecta solo)') : (s && s.error) || 'el bot no contestó bien',
         };
       } catch (err) {
         state = { ...OFFLINE, error: err.message };

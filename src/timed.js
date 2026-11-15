@@ -78,7 +78,10 @@ const EXTERNAL_WAIT_MS = 2500;
 // cuanto abre la vela siguiente (dentro de sus primeros SYNC_OPEN_MS). Hace falta el reloj de la
 // vela; sin el, todo sigue como antes. La martingala no espera: sale al perder.
 const SYNC_LEAD_MS = 500;
-const SYNC_OPEN_MS = 4000;
+// Si a la vela le falta menos que el analisis menos esto, ya no da tiempo: se espera a la vela siguiente
+// (15 nov, en vivo: un analisis que arranco tarde saco la senal a los 3.5 s de la vela).
+const SYNC_LATE_MS = 1500;
+const SYNC_OPEN_MS = 2500;
 const SYNC_MAX_WAIT_MS = 20000; // tope de espera con el analisis ya hecho (por si el reloj falla)
 const MARTIN_ALERT_MS = 1500;
 const MARTIN_ALERT_PART = 0.25;
@@ -760,7 +763,11 @@ function createTimedTracker() {
       let syncHold = false;
       if (newCandle && clockKnown && !hold && !pending && !watching && status === 'ok' && (!manual || armed)) {
         const justOpened = candle.elapsedMs !== null && candle.elapsedMs <= SYNC_OPEN_MS;
-        if (!observed) syncHold = pauseMs > 0 ? candle.remainingMs > pauseMs + SYNC_LEAD_MS : !justOpened;
+        if (!observed) {
+          // El analisis solo arranca en su ventana: cuando a la vela le falta justo lo que dura.
+          const inWindow = candle.remainingMs <= pauseMs + SYNC_LEAD_MS && candle.remainingMs >= pauseMs - SYNC_LATE_MS;
+          syncHold = pauseMs > 0 ? !inWindow : !justOpened;
+        }
         else syncHold = !justOpened && now - observedAt < SYNC_MAX_WAIT_MS;
       }
 
@@ -1030,4 +1037,4 @@ function createTimedTracker() {
   };
 }
 
-module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum, EARLY_CANDLE_MS, PRICE_LOST_MS, NO_SIGNAL_MS, AI_STREAK_BRAKE, ENTRY_SEEN_LAG_MS, EXTERNAL_WAIT_MS, SYNC_LEAD_MS, SYNC_OPEN_MS };
+module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum, EARLY_CANDLE_MS, PRICE_LOST_MS, NO_SIGNAL_MS, AI_STREAK_BRAKE, ENTRY_SEEN_LAG_MS, EXTERNAL_WAIT_MS, SYNC_LEAD_MS, SYNC_LATE_MS, SYNC_OPEN_MS };

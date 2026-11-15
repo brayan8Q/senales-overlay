@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createTimedTracker, SYNC_LEAD_MS, SYNC_OPEN_MS } = require('../src/timed');
+const { createTimedTracker, SYNC_LEAD_MS, SYNC_LATE_MS, SYNC_OPEN_MS } = require('../src/timed');
 const { chain } = require('./helpers');
 
 // PREDICCIÓN AL ABRIR CADA VELA NUEVA: se analiza al final de la vela en curso y la señal sale en
@@ -73,14 +73,30 @@ test('con el botón: PREDECIR a media vela espera, analiza al final y predice al
   assert.equal(s.phase, 'signal');
 });
 
-test('si el análisis termina con la vela ya abierta (dentro de sus primeros segundos), la señal sale ahí', () => {
+test('si se llega un poco tarde, el análisis termina con la vela recién abierta y la señal sale ahí', () => {
   const { t, read } = make({ manual: true });
   t.predict();
-  let s = read(12000); // faltan 3 s: el análisis empieza ya y terminará 2 s dentro de la vela nueva
+  let s = read(11000); // faltan 4 s: el análisis empieza ya y terminará 1 s dentro de la vela nueva
   assert.equal(s.phase, 'analysis');
-  s = read(17000);
-  assert.equal(s.phase, 'signal'); // la vela nueva lleva 2 s (límite: ' + SYNC_OPEN_MS + ' ms)
-  assert.ok(SYNC_OPEN_MS >= 2000);
+  s = read(16000);
+  assert.equal(s.phase, 'signal'); // la vela nueva lleva 1 s
+  assert.ok(SYNC_OPEN_MS >= 1500);
+});
+
+test('si ya no da tiempo en esta vela, no sale a media vela: se espera a la siguiente', () => {
+  const { t, read } = make({ manual: true });
+  t.predict();
+  let s = read(13000); // faltan 2 s: el análisis (5 s) acabaría 3 s dentro de la vela nueva
+  assert.equal(s.phase, 'waiting');
+  s = read(18000);
+  assert.equal(s.phase, 'waiting'); // nada a media vela
+  s = read(PERIOD + 9600);
+  assert.equal(s.phase, 'analysis');
+  s = read(2 * PERIOD - 300);
+  assert.equal(s.phase, 'waiting');
+  s = read(2 * PERIOD + 300);
+  assert.equal(s.phase, 'signal');
+  assert.equal(SYNC_LATE_MS, 1500);
 });
 
 test('sin análisis (0 s): la señal solo sale al abrir una vela', () => {
