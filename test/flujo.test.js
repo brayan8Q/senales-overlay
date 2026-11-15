@@ -117,7 +117,7 @@ const fakeImage = () => ({
   toPNG: () => Buffer.alloc(8),
 });
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'lector-flujo-'));
-fs.writeFileSync(path.join(userData, 'config.json'), JSON.stringify({ pauseSeconds: 3, cycleSeconds: 5, manual: true, alwaysSignal: true, untilClose: true, martinLevels: 0, entryWaitSeconds: 0 }));
+fs.writeFileSync(path.join(userData, 'config.json'), JSON.stringify({ pauseSeconds: 3, cycleSeconds: 5, manual: true, alwaysSignal: true, untilClose: true, martinLevels: 0, entryWaitSeconds: 0, newCandle: false }));
 class FakeWindow {
   constructor() {
     this.webContents = { send: (_channel, state) => sent.push(state) };

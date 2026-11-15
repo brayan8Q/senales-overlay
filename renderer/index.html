@@ -155,6 +155,10 @@
         <input id="auto-mode" type="checkbox" />
         <span>Predecir solo, sin botón (automático)</span>
       </label>
+      <label class="check" title="El panel analiza al final de la vela en curso y la señal aparece justo al abrir la vela siguiente (así entra al inicio de la vela). Necesita el reloj de la vela (con la fuente interna es exacto). La martingala no espera: sale en cuanto la señal pierde.">
+        <input id="new-candle" type="checkbox" checked />
+        <span>Predicción al abrir cada vela nueva</span>
+      </label>
       <label class="check" title="Al pulsar PREDECIR la señal sale en ese instante, con las reglas del panel y el movimiento del precio de ese momento. No espera el análisis ni a la IA (que tarda 3 a 5 s). Pensado para expiraciones de 5 a 15 segundos.">
         <input id="instant" type="checkbox" />
         <span>Señal al instante al pulsar (sin esperar a la IA)</span>

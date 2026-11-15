@@ -133,6 +133,7 @@ $('btn-visor').addEventListener('click', () => api.toggleVisor());
 $('martin').addEventListener('change', (e) => api.setMartin(Number(e.target.value)));
 $('entry-wait').addEventListener('change', (e) => api.setEntryWait(Number(e.target.value)));
 $('auto-trade').addEventListener('change', (e) => api.setAutoTrade(e.target.checked));
+$('new-candle').addEventListener('change', (e) => api.setNewCandle(e.target.checked));
 
 // IA: tres proveedores, cada uno con su clave. Los de ChatGPT conservan sus ids de siempre.
 const AI_BLOCKS = [
@@ -517,9 +518,13 @@ api.onState((s) => {
   if (waiting) {
     $('signal').className = 'waiting';
     $('signal-label').textContent = 'ESPERANDO LA SIGUIENTE VELA';
-    $('signal-detail').textContent = s.clockKnown
-      ? `La vela en curso ya va avanzada. La nueva abre en ${Math.ceil(s.remainingMs / 1000)} s: ahí empiezo el análisis.`
-      : 'La vela en curso ya va avanzada. Empiezo el análisis en cuanto abra la nueva.';
+    if (s.newCandle) {
+      $('signal-detail').textContent = `La predicción sale al abrir la vela nueva${s.clockKnown ? ` (en ${Math.ceil(s.remainingMs / 1000)} s)` : ''}.`;
+    } else {
+      $('signal-detail').textContent = s.clockKnown
+        ? `La vela en curso ya va avanzada. La nueva abre en ${Math.ceil(s.remainingMs / 1000)} s: ahí empiezo el análisis.`
+        : 'La vela en curso ya va avanzada. Empiezo el análisis en cuanto abra la nueva.';
+    }
     $('signal-source').textContent = '';
   } else if (resting) {
     $('signal').className = 'wait';
@@ -783,6 +788,7 @@ api.onState((s) => {
   if (document.activeElement !== $('martin')) $('martin').value = s.martinLevels === undefined ? 1 : s.martinLevels;
   if (document.activeElement !== $('entry-wait')) $('entry-wait').value = s.entryWaitSeconds === undefined ? 5 : s.entryWaitSeconds;
   $('auto-trade').checked = !s.bot || s.bot.enabled !== false;
+  $('new-candle').checked = s.newCandle !== false;
   $('pattern-veto').checked = s.patternVeto !== false;
   $('anti-rebound').checked = s.antiRebound !== false;
   $('internal-source').checked = s.internalSource !== false;

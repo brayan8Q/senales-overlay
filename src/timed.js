@@ -73,6 +73,13 @@ const ENTRY_SEEN_LAG_MS = 400;
 // Con el bot (ver botbridge.js) el resultado lo da la plataforma: al terminar el plazo se le espera
 // este tiempo antes de calificar con el precio propio.
 const EXTERNAL_WAIT_MS = 2500;
+// PREDICCION AL ABRIR CADA VELA NUEVA (15 nov 2026): el analisis se hace al final de la vela en
+// curso (empieza cuando le falta lo que dura el analisis, mas este margen) y la senal sale en
+// cuanto abre la vela siguiente (dentro de sus primeros SYNC_OPEN_MS). Hace falta el reloj de la
+// vela; sin el, todo sigue como antes. La martingala no espera: sale al perder.
+const SYNC_LEAD_MS = 500;
+const SYNC_OPEN_MS = 4000;
+const SYNC_MAX_WAIT_MS = 20000; // tope de espera con el analisis ya hecho (por si el reloj falla)
 const MARTIN_ALERT_MS = 1500;
 const MARTIN_ALERT_PART = 0.25;
 const OPPOSITE = { up: 'down', down: 'up' };
@@ -327,6 +334,7 @@ function createTimedTracker() {
   let shadows = [];
   // Seguimiento: la senal anterior perdio y toca martingala: { level, lostDir }
   let nextMartin = null;
+  let observedAt = 0; // cuando termino el ultimo analisis
 
   /**
    * Marca el precio de ahora. De dos maneras, la que se pueda:
@@ -452,6 +460,8 @@ function createTimedTracker() {
      *        { clave: motivo }. Una senal de esos patrones queda en ESPERAR y se mide en papel.
      * @param {number} [input.martin]  Seguimiento: cuantas martingalas seguidas se dan como mucho
      *        cuando una senal pierde (0 = ninguna).
+     * @param {boolean} [input.newCandle]  La prediccion sale siempre al abrir una vela nueva: se
+     *        analiza al final de la vela en curso y la senal aparece al abrir la siguiente.
      * @param {number} [input.entryWaitMs]  Dos etapas: cuanto se espera a que el usuario ponga su
      *        operacion; el plazo de la senal cuenta desde que entra (0 = cuenta desde la senal).
      * @param {boolean|{price?:number, agoMs?:number}} [input.userEntered]  En esta lectura se vio
@@ -491,6 +501,7 @@ function createTimedTracker() {
       antiRebote = false,
       vetoedPatterns = null,
       martin = 0,
+      newCandle = false,
       entryWaitMs = 0,
       userEntered = false,
       externalAwait = false,
@@ -661,6 +672,7 @@ function createTimedTracker() {
           remember(moveSince(watching.mark, priceY, completed, quote));
           watching = null;
           observed = true;
+          observedAt = now;
         }
       }
 
@@ -743,8 +755,17 @@ function createTimedTracker() {
         }
       }
 
+      // 2d) PREDICCION AL ABRIR CADA VELA NUEVA: se espera el momento. Primero, a que a la vela en
+      //     curso le falte lo que dura el analisis; ya analizado, a que abra la vela siguiente.
+      let syncHold = false;
+      if (newCandle && clockKnown && !hold && !pending && !watching && status === 'ok' && (!manual || armed)) {
+        const justOpened = candle.elapsedMs !== null && candle.elapsedMs <= SYNC_OPEN_MS;
+        if (!observed) syncHold = pauseMs > 0 ? candle.remainingMs > pauseMs + SYNC_LEAD_MS : !justOpened;
+        else syncHold = !justOpened && now - observedAt < SYNC_MAX_WAIT_MS;
+      }
+
       // 3) Sin senal ni analisis en curso: empieza lo que toque (en manual, solo si se pidio).
-      if (!hold && !pending && !watching && status === 'ok' && (!manual || armed)) {
+      if (!hold && !syncHold && !pending && !watching && status === 'ok' && (!manual || armed)) {
         const mark = markNow(priceY, completed, quote);
         if (mark && pauseMs > 0 && !observed) {
           watching = { mark, time: now };
@@ -917,7 +938,7 @@ function createTimedTracker() {
       } else if (watching) {
         phase = 'analysis';
         remainingMs = Math.max(0, pauseMs - (now - watching.time));
-      } else if (waiting) {
+      } else if (waiting || syncHold) {
         phase = 'waiting'; // esperando a que abra la vela siguiente
         remainingMs = clockKnown ? candle.remainingMs : 0;
       }
@@ -1004,8 +1025,9 @@ function createTimedTracker() {
       waiting = null;
       shadows = [];
       nextMartin = null;
+      observedAt = 0;
     },
   };
 }
 
-module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum, EARLY_CANDLE_MS, PRICE_LOST_MS, NO_SIGNAL_MS, AI_STREAK_BRAKE, ENTRY_SEEN_LAG_MS, EXTERNAL_WAIT_MS };
+module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum, EARLY_CANDLE_MS, PRICE_LOST_MS, NO_SIGNAL_MS, AI_STREAK_BRAKE, ENTRY_SEEN_LAG_MS, EXTERNAL_WAIT_MS, SYNC_LEAD_MS, SYNC_OPEN_MS };

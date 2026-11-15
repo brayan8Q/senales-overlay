@@ -98,6 +98,8 @@ const config = {
   // Bot en DEMO: si el puente del bot de Pocket esta abierto (trader\pocket_tyl\lector.py), cada
   // senal y su martingala las abre el bot en la cuenta DEMO; el panel cuenta desde esa entrada.
   autoTrade: true,
+  // La prediccion sale siempre al abrir una vela nueva (se analiza al final de la vela en curso).
+  newCandle: true,
 };
 /** Senal al instante: solo aplica cuando la prediccion se pide con el boton. */
 const instantMode = () => config.instant && config.manual;
@@ -652,7 +654,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -1019,6 +1021,7 @@ function loadConfig() {
     if (Number.isFinite(saved.martinLevels)) config.martinLevels = Math.max(0, Math.min(3, Math.round(saved.martinLevels)));
     if (Number.isFinite(saved.entryWaitSeconds)) config.entryWaitSeconds = Math.max(0, Math.min(30, Math.round(saved.entryWaitSeconds)));
     if (typeof saved.autoTrade === 'boolean') config.autoTrade = saved.autoTrade;
+    if (typeof saved.newCandle === 'boolean') config.newCandle = saved.newCandle;
     if (Number.isFinite(saved.entryDelayMs)) config.entryDelayMs = Math.max(0, Math.min(ENTRY_MAX_MS, saved.entryDelayMs));
     if (typeof saved.asset === 'string') config.asset = saved.asset;
   } catch {
@@ -1119,6 +1122,7 @@ function publish(statusOverride) {
     entered: last.enteredAgoMs !== null && last.enteredAgoMs !== undefined,
     martinLevels: config.martinLevels,
     martin: martinTally,
+    newCandle: config.newCandle,
     patternVeto: config.patternVeto,
     antiRebound: config.antiRebound,
     internalSource: config.internalSource,
@@ -1423,6 +1427,8 @@ async function scanTick() {
         vetoedPatterns: vetoedPatterns(),
         // Seguimiento: si la senal pierde, sale una martingala en ese instante (hasta este tope).
         martin: config.martinLevels,
+        // La prediccion sale al abrir cada vela nueva (analisis al final de la vela en curso).
+        newCandle: config.newCandle,
         // Dos etapas: se espera la entrada del usuario y el plazo cuenta desde que entra.
         entryWaitMs: config.entryWaitSeconds * 1000,
         userEntered,
@@ -1926,6 +1932,13 @@ ipcMain.on('set-martin', (_e, value) => {
 // Bot en DEMO: que el bot abra las operaciones (si su puente esta abierto) o solo marcar la senal.
 ipcMain.on('set-auto-trade', (_e, value) => {
   config.autoTrade = Boolean(value);
+  saveConfig();
+  publish();
+});
+
+// La prediccion sale siempre al abrir una vela nueva (true) o en cuanto termina el analisis (false).
+ipcMain.on('set-new-candle', (_e, value) => {
+  config.newCandle = Boolean(value);
   saveConfig();
   publish();
 });
