@@ -68,7 +68,7 @@ function advance(at) {
 
 const rowOf = (price) => Math.round(H / 2 - price * PX);
 const xOf = (index) => 20 + index * 24;
-function draw({ blank = false, mirror = false, blob = false, mark = false } = {}) {
+function draw({ blank = false, mirror = false, blob = false, mark = false, text = false } = {}) {
   const rgba = Buffer.alloc(W * H * 4);
   for (let p = 0; p < rgba.length; p += 4) {
     rgba[p] = BG[0];
@@ -101,6 +101,11 @@ function draw({ blank = false, mirror = false, blob = false, mark = false } = {}
     if (mark && i === list.length - 1) {
       const y0 = rowOf(m * market.price) + 14;
       for (let y = y0; y < y0 + 9; y++) for (let x = x0 + 16; x < x0 + 22; x++) paint(x, y, [255, 255, 255]);
+    }
+    // Letras blancas que ya estaban ahí (como las del globo de la operación anterior), sobre el precio.
+    if (text && i === list.length - 1) {
+      const y0 = rowOf(m * market.price) - 22;
+      for (let y = y0; y < y0 + 8; y++) for (let x = x0 + 16; x < x0 + 24; x++) paint(x, y, [255, 255, 255]);
     }
     // "Globo" de la plataforma: alarga hacia arriba el cuerpo de una vela cerrada (la deforma).
     if (blob && i === list.length - 4) for (let y = bodyTop - 14; y < bodyTop; y++) for (let x = x0; x < x0 + 15; x++) paint(x, y, color);
@@ -484,6 +489,26 @@ test('dos etapas: la señal espera tu entrada y el plazo cuenta desde que entras
   let log = records();
   assert.match(log, /\nE,\d+,espera-entrada,5\n/);
   assert.match(log, /\nE,\d+,entro,3\.\d\n/); // tardó unos 3.9 s en entrar
+
+  // Con letras blancas ya a la vista (el globo de la operación anterior) no se da una entrada por
+  // vista; pero la marca nueva, al lado, sí se nota.
+  for (;;) {
+    handlers.predict();
+    await Promise.resolve();
+    do step = await read({ text: true });
+    while (step.s.phase !== 'signal');
+    if (step.s.signal.dir) break;
+    while (step.s.phase === 'signal') step = await read({ text: true });
+  }
+  for (let i = 0; i < 5; i++) {
+    step = await read({ text: true });
+    assert.ok(step.s.entryWait, 'las letras que ya estaban no son una entrada');
+  }
+  step = await read({ text: true, mark: true });
+  step = await read({ text: true, mark: true });
+  assert.equal(step.s.entered, true, 'la marca nueva se ve aunque haya otras letras blancas al lado');
+  do step = await read({ text: true, mark: true });
+  while (step.s.phase === 'signal');
 
   // Si no entra en los 5 s, la señal se suelta sin contar nada.
   for (;;) {

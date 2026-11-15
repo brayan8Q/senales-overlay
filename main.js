@@ -647,7 +647,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -705,6 +705,7 @@ let shownSignal = null; // la senal en curso (para notar cuando de una se pasa d
 // src/ordermark.js). Si suben lo que mide una marca, es que puso su operacion.
 let entryBase = 0;
 let entryHits = 0; // lecturas seguidas con la marca a la vista (se piden dos para darla por buena)
+let entryBadges = 0; // globos de resultado a la vista en la lectura anterior
 let entryWasWaiting = false;
 let entryStageLogged = false;
 let entryStageAt = 0;
@@ -1271,17 +1272,21 @@ async function scanTick() {
       // (la marca "▼ $1" que dibuja la plataforma). Si suben respecto al inicio de la espera, entro.
       let userEntered = false;
       if (last.entryWait && pixelForming) {
+        // (15 nov, tras la primera prueba real) NO se descuenta la zona del globo de resultado: la
+        // marca de la entrada siguiente (la de la martingala) cae justo encima o al lado del globo
+        // de la operacion que acaba de cerrar, y descontandola no se veia. En su lugar, cuando
+        // APARECE un globo se vuelve a tomar la base (sus letras blancas no son una entrada).
         const white = countOrderMark(pixels.data, pixels.width, pixels.height, {
           x0: pixelForming.x0,
           x1: pixelForming.x1,
           row: pixelPriceY !== null ? pixelPriceY : -pixelForming.close,
-          badges,
         });
         if (white !== null) {
-          if (!entryWasWaiting) {
-            entryBase = white; // primera lectura de la espera: lo que ya habia
+          if (!entryWasWaiting || badges.length > entryBadges) {
+            entryBase = white; // primera lectura de la espera, o acaba de salir un globo: lo que ya habia
             entryHits = 0;
           }
+          entryBadges = badges.length;
           const seen = entryWasWaiting && white - entryBase >= MARK_MIN;
           // Dos lecturas seguidas: un globo de resultado a medio dibujar (aun sin reconocer) dura una.
           entryHits = seen ? entryHits + 1 : 0;
