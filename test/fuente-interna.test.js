@@ -68,7 +68,7 @@ function advance(at) {
 
 const rowOf = (price) => Math.round(H / 2 - price * PX);
 const xOf = (index) => 20 + index * 24;
-function draw({ blank = false, mirror = false, blob = false } = {}) {
+function draw({ blank = false, mirror = false, blob = false, mark = false } = {}) {
   const rgba = Buffer.alloc(W * H * 4);
   for (let p = 0; p < rgba.length; p += 4) {
     rgba[p] = BG[0];
@@ -97,6 +97,11 @@ function draw({ blank = false, mirror = false, blob = false } = {}) {
     const bodyTop = Math.min(rowOf(m * c.open), rowOf(m * c.close));
     const bodyBottom = Math.max(rowOf(m * c.open), rowOf(m * c.close));
     for (let y = bodyTop; y <= bodyBottom; y++) for (let x = x0; x < x0 + 15; x++) paint(x, y, color);
+    // Marca de una operación abierta: un bloque blanco chico bajo el precio, junto a la vela en curso.
+    if (mark && i === list.length - 1) {
+      const y0 = rowOf(m * market.price) + 14;
+      for (let y = y0; y < y0 + 9; y++) for (let x = x0 + 16; x < x0 + 22; x++) paint(x, y, [255, 255, 255]);
+    }
     // "Globo" de la plataforma: alarga hacia arriba el cuerpo de una vela cerrada (la deforma).
     if (blob && i === list.length - 4) for (let y = bodyTop - 14; y < bodyTop; y++) for (let x = x0; x < x0 + 15; x++) paint(x, y, color);
   });
@@ -125,7 +130,7 @@ const fakeImage = () => ({
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'lector-fuente-'));
 fs.writeFileSync(
   path.join(userData, 'config.json'),
-  JSON.stringify({ pauseSeconds: 0, cycleSeconds: 3, manual: true, alwaysSignal: true, asset: 'EUR/USD OTC', payout: 92, antiRebound: false, patternVeto: false, martinLevels: 0 }),
+  JSON.stringify({ pauseSeconds: 0, cycleSeconds: 3, manual: true, alwaysSignal: true, asset: 'EUR/USD OTC', payout: 92, antiRebound: false, patternVeto: false, martinLevels: 0, entryWaitSeconds: 0 }),
 );
 // La ventana de la fuente interna: su depurador entrega aquí los mensajes del websocket.
 const terminal = { listener: null, url: null, visible: false, pay: 'Payout\n+58%\n+$15.80', sym: 'EUR/USD OTC', scripts: [] };
@@ -434,6 +439,68 @@ test('seguimiento: cuando una señal pierde, el panel da la martingala en esa mi
   s = state();
   assert.ok(s.martin.wins + s.martin.losses + s.martin.ties >= 1);
   handlers['set-martin'](null, 0);
+});
+
+test('dos etapas: la señal espera tu entrada y el plazo cuenta desde que entras', async () => {
+  handlers['set-entry-wait'](null, 5);
+  let s = null;
+  for (let i = 0; i < 4; i++) ({ s } = await read());
+  assert.equal(s.entryWaitSeconds, 5);
+  // Hasta dar con una señal con lado.
+  let step = null;
+  for (;;) {
+    handlers.predict();
+    await Promise.resolve();
+    do step = await read();
+    while (step.s.phase !== 'signal');
+    if (step.s.signal.dir) break;
+    while (step.s.phase === 'signal') step = await read();
+  }
+  const dir = step.s.signal.dir;
+  // Etapa 1: espera de entrada. Pasan más de 3 s (el plazo) sin entrar y no se califica nada.
+  assert.ok(step.s.entryWait && step.s.entryWait.totalMs === 5000);
+  assert.equal(step.s.entered, false);
+  assert.equal(step.s.follow, null);
+  for (let i = 0; i < 11; i++) {
+    step = await read();
+    assert.equal(step.s.phase, 'signal');
+    assert.ok(step.s.entryWait, `a los ${(i + 1) * 0.3} s sigue esperando la entrada`);
+  }
+  // El usuario entra: aparece su marca junto a la vela. A la segunda lectura se da por buena.
+  step = await read({ mark: true });
+  assert.ok(step.s.entryWait, 'una sola lectura con la marca todavía no cuenta');
+  step = await read({ mark: true });
+  assert.equal(step.s.entryWait, null);
+  assert.equal(step.s.entered, true);
+  assert.ok(step.s.follow && step.s.follow.state, 'ya hay operación: se dice cómo va');
+  assert.ok(step.s.remainingMs <= 3000 && step.s.remainingMs >= 2300, `le quedan ${step.s.remainingMs} ms`);
+  // Etapa 2: se mide contra el precio de SU entrada, 3 s después.
+  const p0 = Number(step.s.price);
+  do step = await read({ mark: true });
+  while (step.s.phase === 'signal');
+  const p1 = Number(step.s.price);
+  const expected = p1 === p0 ? 'empate' : p1 > p0 === (dir === 'up') ? 'acertó' : 'falló';
+  assert.equal(step.s.lastResult, expected, `entró en ${p0}, terminó en ${p1}`);
+  let log = records();
+  assert.match(log, /\nE,\d+,espera-entrada,5\n/);
+  assert.match(log, /\nE,\d+,entro,3\.\d\n/); // tardó unos 3.9 s en entrar
+
+  // Si no entra en los 5 s, la señal se suelta sin contar nada.
+  for (;;) {
+    handlers.predict();
+    await Promise.resolve();
+    do step = await read();
+    while (step.s.phase !== 'signal');
+    if (step.s.signal.dir) break;
+    while (step.s.phase === 'signal') step = await read();
+  }
+  const before = state().patterns.reduce((n, p) => n + p.n, 0);
+  do step = await read();
+  while (step.s.phase === 'signal');
+  assert.match(step.s.lastResult, /^sin entrada: no vi tu operación en 5 s/);
+  assert.equal(state().patterns.reduce((n, p) => n + p.n, 0), before, 'no se contó ninguna operación');
+  assert.match(records(), /\nR,\d+,sin entrada: no vi tu operación en 5 s\n/);
+  handlers['set-entry-wait'](null, 0);
 });
 
 test('si la terminal está en otro par, el panel la pone sola en el par que se opera', async () => {

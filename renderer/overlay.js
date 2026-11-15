@@ -131,6 +131,7 @@ $('anti-rebound').addEventListener('change', (e) => api.setAntiRebound(e.target.
 $('internal-source').addEventListener('change', (e) => api.setInternalSource(e.target.checked));
 $('btn-visor').addEventListener('click', () => api.toggleVisor());
 $('martin').addEventListener('change', (e) => api.setMartin(Number(e.target.value)));
+$('entry-wait').addEventListener('change', (e) => api.setEntryWait(Number(e.target.value)));
 
 // IA: tres proveedores, cada uno con su clave. Los de ChatGPT conservan sus ids de siempre.
 const AI_BLOCKS = [
@@ -276,7 +277,7 @@ function renderScan(s) {
   else if (scan.mode === 'analysis') label.textContent = `ESCANEANDO · ${scan.candles.length} velas${saved} · ${state}${rate}${who}`;
   else if (scan.mode === 'signal') {
     // Con la señal abierta el escáner sigue pasando y analizando hasta que termina: se dice cómo va.
-    const going = s.follow && s.follow.state ? ` · va ${s.follow.state}` : '';
+    const going = s.entryWait ? ' · esperando tu entrada' : s.follow && s.follow.state ? ` · va ${s.follow.state}` : '';
     const what = s.signal && s.signal.source === 'martingala' ? 'LA MARTINGALA' : 'LA SEÑAL';
     label.textContent = `ESCANEANDO ${what}${going} · ${state}${rate}`;
   } else label.textContent = `SIGUIENDO LA VELA ACTUAL · ${state}${rate}`;
@@ -452,6 +453,11 @@ function renderProgress(s) {
     bar.className = 'signal';
     $('progress-fill').style.width = `${Math.round(Math.min(1, s.remainingMs / total) * 100)}%`;
     $('progress-text').textContent = `Sin predicción · listo en ${clockText(s.remainingMs)}`;
+  } else if (s.entryWait) {
+    // Etapa 1: la señal ya salió y se espera tu entrada; el plazo empieza a contar cuando entres.
+    bar.className = 'entry';
+    $('progress-fill').style.width = `${Math.round(Math.min(1, s.entryWait.leftMs / Math.max(1, s.entryWait.totalMs)) * 100)}%`;
+    $('progress-text').textContent = `ENTRA AHORA · te quedan ${clockText(s.entryWait.leftMs)}`;
   } else if (s.untilClose) {
     // La señal vale hasta el cierre de la vela: la barra se vacía con lo que le falta a la vela.
     const total = Math.max(1, s.candleSeconds * 1000);
@@ -462,7 +468,7 @@ function renderProgress(s) {
     const total = Math.max(1, s.cycleSeconds * 1000);
     bar.className = 'signal';
     $('progress-fill').style.width = `${Math.round(Math.min(1, s.remainingMs / total) * 100)}%`;
-    $('progress-text').textContent = `Se califica en ${clockText(s.remainingMs)}`;
+    $('progress-text').textContent = s.entered ? `Entraste · se califica en ${clockText(s.remainingMs)}` : `Se califica en ${clockText(s.remainingMs)}`;
   }
 }
 
@@ -486,7 +492,7 @@ api.onState((s) => {
   predict.classList.toggle('hidden', !manual);
   predict.disabled = !(resting && s.ready);
   const noSide = s.phase === 'signal' && !(s.signal && s.signal.dir); // salió ESPERAR: no hay predicción
-  predict.textContent = waiting ? 'Esperando la vela…' : analyzing ? 'Analizando…' : noSide ? 'Sin predicción…' : s.phase === 'signal' ? 'Señal en curso' : 'PREDECIR';
+  predict.textContent = waiting ? 'Esperando la vela…' : analyzing ? 'Analizando…' : noSide ? 'Sin predicción…' : s.phase === 'signal' ? (s.entryWait ? 'Esperando tu entrada' : 'Operación en curso') : 'PREDECIR';
 
   if (waiting) {
     $('signal').className = 'waiting';
@@ -558,8 +564,12 @@ api.onState((s) => {
   // Seguimiento: cómo va la señal en este instante y, si va perdiendo al final, la martingala que viene.
   const follow = showing && dir ? s.follow : null;
   const line = $('signal-follow');
-  line.classList.toggle('hidden', !follow || !follow.state);
-  if (follow && follow.state) {
+  const awaiting = showing && dir ? s.entryWait : null;
+  line.classList.toggle('hidden', !awaiting && (!follow || !follow.state));
+  if (awaiting) {
+    line.className = 'entry';
+    line.textContent = `ESPERANDO TU ENTRADA · ${Math.ceil(awaiting.leftMs / 1000)} s`;
+  } else if (follow && follow.state) {
     if (follow.next) {
       line.className = 'alert';
       line.textContent = `VA PERDIENDO · prepara MARTIN ${follow.next.dir === 'up' ? 'SUBE ▲' : 'BAJA ▼'}`;
@@ -723,6 +733,7 @@ api.onState((s) => {
   if (document.activeElement !== $('pause')) $('pause').value = s.pauseSeconds;
   $('always').checked = s.alwaysSignal;
   if (document.activeElement !== $('martin')) $('martin').value = s.martinLevels === undefined ? 1 : s.martinLevels;
+  if (document.activeElement !== $('entry-wait')) $('entry-wait').value = s.entryWaitSeconds === undefined ? 5 : s.entryWaitSeconds;
   $('pattern-veto').checked = s.patternVeto !== false;
   $('anti-rebound').checked = s.antiRebound !== false;
   $('internal-source').checked = s.internalSource !== false;

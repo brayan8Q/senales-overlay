@@ -132,6 +132,21 @@ Tres cambios. Ninguno manda órdenes ni toca una cuenta: el panel sigue siendo s
 - El panel no dice cuánto apostar. La martingala no sube el acierto: es otra entrada, y recuperar una pérdida
   exige apostar más (con pago de 52 %, 1.92 veces lo perdido solo para quedar en cero).
 
+### 5. Dos etapas: espera de entrada y plazo contado desde tu entrada (`src/ordermark.js`, `src/timed.js`)
+
+- **Etapa 1 · espera de entrada.** Sale la señal y el panel espera (5 s por defecto) a que pongas tu
+  operación. La reconoce por la marca blanca que la plataforma dibuja junto a la vela («▼ $1»): medido en 60
+  imágenes reales, sin operación hay 0 píxeles blancos ahí y con una marca, 18 o más. Se pide verla en dos
+  lecturas seguidas, y el globo del resultado (que también trae letras blancas) se descuenta.
+- **Etapa 2 · operación.** En cuanto entras, el plazo de la señal empieza a contar desde ahí y se mide contra
+  el precio de **tu** entrada. El escáner sigue pasando, se dice cómo va y, si va perdiendo, se avisa la martingala.
+- La **martingala** pasa por las mismas dos etapas: sale, espera tu entrada y cuenta desde que entras.
+- Si no entras en el tiempo de espera, la señal se suelta («sin entrada») sin contar nada y sin martingala.
+- En ⚙, «Espera de entrada (segundos)»; 0 = el plazo cuenta desde que sale la señal, como antes.
+- Registro: `E,ms,espera-entrada,segundos` y `E,ms,entro,segundos que tardaste`.
+- Límite: la marca se ve unas décimas después de la entrada real (se compensa con 0.4 s fijos), así que el
+  cierre del panel y el de la plataforma pueden diferir por décimas. Solo funciona con la gráfica a la vista.
+
 ### Validación con el registro real (`node tools/validar-historico.js`)
 
 Rearma las velas de 15 s con el precio registrado y aplica las mismas funciones del panel a las señales ya
@@ -634,4 +649,5 @@ npm test   # lector de velas (sobre una captura real), señal y marcador
 - `src/rebound.js`: veto anti-rebote (vertical de velas grandes en un extremo y sus excepciones).
 - `src/feed.js`: fuente interna: lee los mensajes de la terminal demo y arma precio, velas y reloj.
 - `src/pricemap.js`: puente entre los precios de la fuente interna y las filas de la pantalla.
+- `src/ordermark.js`: reconoce la marca de una operación abierta (para saber cuándo entró el usuario).
 - `tools/validar-historico.js`: repasa el registro real con el anti-rebote y la estadística por patrón.

@@ -134,6 +134,10 @@
         <input id="pause" type="number" min="0" max="600" step="1" value="5" />
       </div>
       <div class="field">
+        <label for="entry-wait" title="Dos etapas. 1) Sale la señal y el panel espera estos segundos a que pongas tu operación (ve aparecer su marca en la gráfica). 2) En cuanto entras, el plazo de la señal empieza a contar desde ahí y se mide contra el precio de tu entrada. Si no entras a tiempo, la señal se suelta sin contar nada. 0 = el plazo cuenta desde que sale la señal.">Espera de entrada (segundos, 0 = no)</label>
+        <input id="entry-wait" type="number" min="0" max="30" step="1" value="5" />
+      </div>
+      <div class="field">
         <label for="martin" title="Seguimiento de la señal: si una señal pierde, el panel da enseguida una martingala hacia donde va el precio en ese momento (y avisa un poco antes si va perdiendo). Aquí va cuántas seguidas como mucho. 0 = sin seguimiento. La martingala no sube el acierto: solo es otra entrada, y cada una arriesga más.">Martingalas de seguimiento (0 = no)</label>
         <input id="martin" type="number" min="0" max="3" step="1" value="1" />
       </div>

@@ -62,6 +62,14 @@ const UNKNOWN_CANDLE_START_MS = 2000;
 // instante, sin pausa ni consulta a la IA: hacia donde va el precio AHORA (lo que se esta
 // escaneando) y, si no se ve claro, hacia donde se fue en la operacion perdida.
 // El aviso previo aparece en el ultimo cuarto de la senal (o en sus ultimos 1.5 s, lo que sea mas).
+// DOS ETAPAS (15 nov 2026): 1) ESPERA DE ENTRADA: sale la senal y se espera a que el usuario ponga
+// su operacion (se ve su marca en la grafica, ver ordermark.js); 2) OPERACION: el plazo de la senal
+// se cuenta desde ESE momento y se mide contra el precio de la entrada. Si no entra en el tiempo
+// de espera, no hay operacion que seguir. La martingala pasa por las mismas dos etapas.
+// La marca se ve un instante despues de la entrada real (lo que tarda la plataforma en dibujarla
+// mas las dos lecturas seguidas que se piden para darla por buena): el plazo se cuenta desde
+// este tiempo antes de haberla confirmado.
+const ENTRY_SEEN_LAG_MS = 400;
 const MARTIN_ALERT_MS = 1500;
 const MARTIN_ALERT_PART = 0.25;
 const OPPOSITE = { up: 'down', down: 'up' };
@@ -441,6 +449,10 @@ function createTimedTracker() {
      *        { clave: motivo }. Una senal de esos patrones queda en ESPERAR y se mide en papel.
      * @param {number} [input.martin]  Seguimiento: cuantas martingalas seguidas se dan como mucho
      *        cuando una senal pierde (0 = ninguna).
+     * @param {number} [input.entryWaitMs]  Dos etapas: cuanto se espera a que el usuario ponga su
+     *        operacion; el plazo de la senal cuenta desde que entra (0 = cuenta desde la senal).
+     * @param {boolean} [input.userEntered]  En esta lectura se vio aparecer la marca de una operacion
+     *        nueva del usuario en la grafica.
      * @param {{known:boolean, seconds:number, elapsedMs:number|null, remainingMs:number|null,
      *          closedNow:boolean, closeRow:number|null}} [input.candle]  Reloj de la vela en curso
      *        (ver candleclock.js). closedNow = acaba de cerrar una vela; closeRow = fila del cierre
@@ -471,6 +483,8 @@ function createTimedTracker() {
       antiRebote = false,
       vetoedPatterns = null,
       martin = 0,
+      entryWaitMs = 0,
+      userEntered = false,
     }) {
       const completed = candles.slice(0, -1);
       const aligned = Boolean(align) && manual; // solo con el boton PREDECIR
@@ -484,10 +498,34 @@ function createTimedTracker() {
       const previousGood = lastGood;
       if (status === 'ok') lastGood = { time: now, priceY, completed, quote };
 
+      // 0a) ESPERA DE ENTRADA: la senal ya salio, pero su plazo no cuenta hasta que el usuario pone
+      //     la operacion. En cuanto se ve su marca, la senal se mide desde ahi (precio y reloj).
+      if (pending && pending.stage === 'entry') {
+        const entry = userEntered && clean ? markNow(priceY, completed, quote) : null;
+        if (entry) {
+          pending.stage = 'trade';
+          pending.mark = entry;
+          pending.time = now - ENTRY_SEEN_LAG_MS;
+          pending.enteredAt = now;
+          if (pending.entry) {
+            pending.entry.mark = entry; // la linea de referencia pasa al precio de la entrada real
+            pending.entry.filled = true;
+            pending.entry.filledAt = now;
+          }
+        } else if (now >= pending.waitUntil) {
+          // No entro: no hubo operacion. No se califica nada ni hay martingala.
+          lastResult = `sin entrada: no vi tu operación en ${Math.round((pending.waitUntil - pending.time) / 1000)} s`;
+          pending = null;
+          nextMartin = null;
+          observed = false;
+          armed = false;
+        }
+      }
+
       // 0) Momento de entrada: la orden del usuario no entra en el instante en que aparece la
       //    senal, sino un poco despues (lo que tarda en hacer clic). La senal se mide desde ahi,
       //    que es el tramo que de verdad se opera.
-      if (pending && !pending.entered && now - pending.time >= pending.entryMs) {
+      if (pending && pending.stage !== 'entry' && !pending.entered && now - pending.time >= pending.entryMs) {
         if (clean) {
           const entry = markNow(priceY, completed, quote);
           if (entry) pending.mark = entry;
@@ -498,7 +536,7 @@ function createTimedTracker() {
       // 0b) Entrada sugerida: la senal marca una linea un poco en contra (mas arriba en una venta,
       //     mas abajo en una compra). En cuanto el precio llega a la linea la entrada se da por
       //     tomada, y desde ahi se mide: la referencia pasa a ser el precio de la linea.
-      if (pending && pending.entry && !pending.entry.filled && clean && priceY !== null && !pending.dueAt) {
+      if (pending && pending.stage !== 'entry' && pending.entry && !pending.entry.filled && clean && priceY !== null && !pending.dueAt) {
         const ended = pending.untilClose ? Boolean(candle && candle.closedNow && now > pending.time) : now - pending.time >= cycleMs + pending.entryMs;
         const entryRow = ended ? null : rowOfMark(pending.entry.mark, priceY, completed, quote);
         if (entryRow !== null && (pending.dir === 'down' ? priceY <= entryRow + 0.5 : priceY >= entryRow - 0.5)) {
@@ -512,7 +550,9 @@ function createTimedTracker() {
       //    ultima lectura buena (si es de ese momento) o se espera un poco a que se destape.
       let sample = null;
       let giveUp = false;
-      if (pending && pending.untilClose) {
+      if (pending && pending.stage === 'entry') {
+        // Esperando la entrada del usuario: todavia no hay nada que calificar.
+      } else if (pending && pending.untilClose) {
         // La senal vale hasta el CIERRE de la vela: se califica cuando cierra (visto en la grafica,
         // o dado por el reloj si algo la tapaba), comparando ese cierre con el precio de la senal.
         if (!pending.dueAt && candle && candle.closedNow && now > pending.time) pending.dueAt = now;
@@ -661,6 +701,8 @@ function createTimedTracker() {
             maxWaitMs: 0,
             graceMs: 0,
             level: follow.level, // 1 = primera martingala
+            stage: entryWaitMs > 0 ? 'entry' : 'trade',
+            waitUntil: now + entryWaitMs,
             info: {
               dir,
               trend: trend.trend,
@@ -810,6 +852,9 @@ function createTimedTracker() {
             // Cuanto dura la senal cuando se mide por segundos: el plazo; sin prediccion, 10 s como mucho.
             spanMs: dir ? cycleMs : Math.min(cycleMs, NO_SIGNAL_MS),
             entry: entryPlan, // linea de entrada sugerida: { mark, kind, text, filled }
+            // Dos etapas: primero se espera la entrada del usuario; el plazo cuenta desde que entra.
+            stage: entryWaitMs > 0 && dir && !untilClose ? 'entry' : 'trade',
+            waitUntil: now + entryWaitMs,
             // Tope para ver (o inferir) el cierre: lo que le falta a la vela mas una vela entera.
             maxWaitMs: untilClose ? candle.remainingMs + candle.seconds * 1000 : 0,
             // Si al cierre la grafica esta tapada, cuanto se espera a poder leer la vela cerrada
@@ -844,7 +889,8 @@ function createTimedTracker() {
       let remainingMs = 0;
       if (pending) {
         phase = 'signal';
-        if (pending.untilClose) remainingMs = pending.dueAt || !clockKnown ? 0 : candle.remainingMs; // hasta el cierre de la vela
+        if (pending.stage === 'entry') remainingMs = Math.max(0, pending.waitUntil - now); // lo que queda para entrar
+        else if (pending.untilClose) remainingMs = pending.dueAt || !clockKnown ? 0 : candle.remainingMs; // hasta el cierre de la vela
         else remainingMs = Math.max(0, pending.spanMs + pending.entryMs - (now - pending.time));
       } else if (watching) {
         phase = 'analysis';
@@ -892,8 +938,12 @@ function createTimedTracker() {
         vetoResults,
         // Seguimiento de la senal en curso: como va en este instante (state) y, si va perdiendo en
         // su tramo final y quedan martingalas, hacia donde saldria la siguiente (next).
+        // Dos etapas: mientras se espera la entrada del usuario, cuanto le queda para entrar.
+        entryWait: pending && pending.stage === 'entry' ? { leftMs: Math.max(0, pending.waitUntil - now), totalMs: pending.waitUntil - pending.time } : null,
+        // Si la senal en curso ya cuenta desde la entrada del usuario, hace cuanto entro.
+        enteredAgoMs: pending && pending.enteredAt ? now - pending.enteredAt : null,
         follow: (() => {
-          if (!pending || !pending.dir) return null;
+          if (!pending || !pending.dir || pending.stage === 'entry') return null;
           const move = clean ? moveSince(pending.mark, priceY, completed, quote) : null;
           const state = move === null ? null : move === 'flat' ? 'igual' : move === pending.dir ? 'ganando' : 'perdiendo';
           const level = pending.level || 0;
@@ -936,4 +986,4 @@ function createTimedTracker() {
   };
 }
 
-module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum, EARLY_CANDLE_MS, PRICE_LOST_MS, NO_SIGNAL_MS, AI_STREAK_BRAKE };
+module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum, EARLY_CANDLE_MS, PRICE_LOST_MS, NO_SIGNAL_MS, AI_STREAK_BRAKE, ENTRY_SEEN_LAG_MS };

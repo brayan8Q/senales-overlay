@@ -396,3 +396,6 @@ html, body {
 @keyframes martin-blink { to { background: #fb923c; } }
 #martin-line { margin-top: 3px; font-size: 9.5px; color: #8b93a3; }
 #signal-label.martin { font-size: 17px; letter-spacing: 0; white-space: nowrap; }
+/* ---------- 15 nov 2026: dos etapas (espera de entrada / operación en curso) ---------- */
+#signal-follow.entry { background: #38bdf8; color: #0b1220; font-size: 11px; }
+#progress.entry #progress-fill { background: #38bdf8; }

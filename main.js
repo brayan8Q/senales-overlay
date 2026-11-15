@@ -37,6 +37,7 @@ const { createCandleClock } = require('./src/candleclock');
 const { PATTERNS, PATTERN_KEYS } = require('./src/formations');
 const { createFeed, assetKey, PERIODS: FEED_PERIODS } = require('./src/feed');
 const { fitPriceMap, toScreen } = require('./src/pricemap');
+const { countOrderMark, MARK_MIN } = require('./src/ordermark');
 
 // PREDECIR con la vela ya avanzada: true = esperar a que abra la vela siguiente y analizar ahi;
 // false = analizar y predecir al momento de pulsar. El usuario pidio quitar la espera (13 nov 2026).
@@ -90,6 +91,9 @@ const config = {
   antiRebound: true, // no dar senal a favor de una vertical recien hecha (ver src/rebound.js)
   internalSource: true, // precios y velas de los datos internos de la terminal demo (ver src/feed.js)
   martinLevels: 1, // seguimiento: martingalas seguidas cuando una senal pierde (0 = sin seguimiento)
+  // Dos etapas: segundos que se espera a que el usuario ponga su operacion; el plazo de la senal
+  // cuenta desde que entra (0 = cuenta desde que sale la senal, como antes).
+  entryWaitSeconds: 5,
 };
 /** Senal al instante: solo aplica cuando la prediccion se pide con el boton. */
 const instantMode = () => config.instant && config.manual;
@@ -643,7 +647,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -697,6 +701,13 @@ let trades = { wins: 0, losses: 0, ties: 0, last: '' };
 let previousCandles = null; // para notar si la vista de la grafica salto
 let previousPhase = 'idle';
 let shownSignal = null; // la senal en curso (para notar cuando de una se pasa directo a su martingala)
+// Entrada del usuario (dos etapas): blancos junto a la vela cuando empezo la espera (ver
+// src/ordermark.js). Si suben lo que mide una marca, es que puso su operacion.
+let entryBase = 0;
+let entryHits = 0; // lecturas seguidas con la marca a la vista (se piden dos para darla por buena)
+let entryWasWaiting = false;
+let entryStageLogged = false;
+let entryStageAt = 0;
 
 // ---------- IA opcional: hasta tres a la vez (ChatGPT, Gemini y Claude) ----------
 // Cada clave vive cifrada en disco y en memoria; nunca se envia al panel ni se escribe en logs.
@@ -941,6 +952,7 @@ function loadConfig() {
     if (typeof saved.antiRebound === 'boolean') config.antiRebound = saved.antiRebound;
     if (typeof saved.internalSource === 'boolean') config.internalSource = saved.internalSource;
     if (Number.isFinite(saved.martinLevels)) config.martinLevels = Math.max(0, Math.min(3, Math.round(saved.martinLevels)));
+    if (Number.isFinite(saved.entryWaitSeconds)) config.entryWaitSeconds = Math.max(0, Math.min(30, Math.round(saved.entryWaitSeconds)));
     if (Number.isFinite(saved.entryDelayMs)) config.entryDelayMs = Math.max(0, Math.min(ENTRY_MAX_MS, saved.entryDelayMs));
     if (typeof saved.asset === 'string') config.asset = saved.asset;
   } catch {
@@ -1026,6 +1038,10 @@ function publish(statusOverride) {
     rebound: reboundTally,
     // Seguimiento: como va la senal en curso, si se avisa martingala, y lo medido de las martingalas.
     follow: last.follow || null,
+    // Dos etapas: mientras se espera la entrada del usuario, cuanto le queda; y si ya entro, hace cuanto.
+    entryWait: last.entryWait || null,
+    entryWaitSeconds: config.entryWaitSeconds,
+    entered: last.enteredAgoMs !== null && last.enteredAgoMs !== undefined,
     martinLevels: config.martinLevels,
     martin: martinTally,
     patternVeto: config.patternVeto,
@@ -1251,6 +1267,29 @@ async function scanTick() {
       clockInfo = inner
         ? inner.clock
         : liveClock.update({ now, closed: closedDetected, seconds: memoryInfo && memoryInfo.candleSeconds ? memoryInfo.candleSeconds : 0 });
+      // Entrada del usuario: mientras se espera, se cuentan los blancos junto a la vela en curso
+      // (la marca "▼ $1" que dibuja la plataforma). Si suben respecto al inicio de la espera, entro.
+      let userEntered = false;
+      if (last.entryWait && pixelForming) {
+        const white = countOrderMark(pixels.data, pixels.width, pixels.height, {
+          x0: pixelForming.x0,
+          x1: pixelForming.x1,
+          row: pixelPriceY !== null ? pixelPriceY : -pixelForming.close,
+          badges,
+        });
+        if (white !== null) {
+          if (!entryWasWaiting) {
+            entryBase = white; // primera lectura de la espera: lo que ya habia
+            entryHits = 0;
+          }
+          const seen = entryWasWaiting && white - entryBase >= MARK_MIN;
+          // Dos lecturas seguidas: un globo de resultado a medio dibujar (aun sin reconocer) dura una.
+          entryHits = seen ? entryHits + 1 : 0;
+          userEntered = entryHits >= 2;
+          if (!seen) entryBase = Math.min(entryBase, white); // una marca vieja que se quita baja la base
+          entryWasWaiting = true;
+        }
+      } else entryWasWaiting = false;
       const advice = councilAdvice(now);
       last = byTime.update({
         candles: usable,
@@ -1287,7 +1326,19 @@ async function scanTick() {
         vetoedPatterns: vetoedPatterns(),
         // Seguimiento: si la senal pierde, sale una martingala en ese instante (hasta este tope).
         martin: config.martinLevels,
+        // Dos etapas: se espera la entrada del usuario y el plazo cuenta desde que entra.
+        entryWaitMs: config.entryWaitSeconds * 1000,
+        userEntered,
       });
+      // Registro de las dos etapas: E,ms,espera-entrada,segundos · E,ms,entro,segundos que tardo
+      if (last.entryWait && !entryStageLogged) {
+        entryStageLogged = true;
+        entryStageAt = now;
+        record(`E,${now},espera-entrada,${Math.round(last.entryWait.totalMs / 100) / 10}`);
+      } else if (!last.entryWait && entryStageLogged) {
+        entryStageLogged = false;
+        if (last.phase === 'signal' && last.enteredAgoMs !== null) record(`E,${now},entro,${Math.round((now - entryStageAt) / 100) / 10}`);
+      }
       // Empieza una senal nueva / termina la anterior. Con seguimiento, de una senal que pierde se
       // pasa directo a su martingala sin salir de la fase 'signal': por eso se mira si cambio la senal.
       const signalStarted = last.phase === 'signal' && Boolean(last.signal) && (previousPhase !== 'signal' || last.signal !== shownSignal);
@@ -1748,6 +1799,15 @@ ipcMain.on('set-martin', (_e, value) => {
   const levels = Math.round(Number(value));
   if (!Number.isFinite(levels) || levels < 0 || levels > 3) return;
   config.martinLevels = levels;
+  saveConfig();
+  publish();
+});
+
+// Dos etapas: segundos de espera de entrada (0 = el plazo cuenta desde que sale la senal).
+ipcMain.on('set-entry-wait', (_e, value) => {
+  const seconds = Math.round(Number(value));
+  if (!Number.isFinite(seconds) || seconds < 0 || seconds > 30) return;
+  config.entryWaitSeconds = seconds;
   saveConfig();
   publish();
 });
