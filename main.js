@@ -89,6 +89,7 @@ const config = {
   patternVeto: true, // vetar los patrones con mala estadistica (20+ operaciones bajo su punto de equilibrio)
   antiRebound: true, // no dar senal a favor de una vertical recien hecha (ver src/rebound.js)
   internalSource: true, // precios y velas de los datos internos de la terminal demo (ver src/feed.js)
+  martinLevels: 1, // seguimiento: martingalas seguidas cuando una senal pierde (0 = sin seguimiento)
 };
 /** Senal al instante: solo aplica cuando la prediccion se pide con el boton. */
 const instantMode = () => config.instant && config.manual;
@@ -229,6 +230,9 @@ let patternOps = []; // operaciones que cuentan para la estadistica: { pattern, 
 let patternTable = {}; // patternStats(patternOps)
 // Senales vetadas por anti-rebote y medidas en papel: cuantas habrian ganado o perdido.
 let reboundTally = { wins: 0, losses: 0, ties: 0 };
+// Martingalas de seguimiento ya medidas (se cuentan aparte: no son senales del analisis).
+let martinTally = { wins: 0, losses: 0, ties: 0 };
+const tallyKey = (key) => (key === 'win' ? 'wins' : key === 'loss' ? 'losses' : 'ties');
 const resultKey = (text) => (/^acert/.test(text) ? 'win' : /^fall/.test(text) ? 'loss' : /^empate/.test(text) ? 'tie' : null);
 // Pago que muestra la terminal demo para el par (fuente interna): { value, at, symbol }.
 let visorPayout = null;
@@ -250,7 +254,11 @@ function addPatternOp(now, { pattern, dir, result, kind }) {
   record(`P,${now},${pattern},${dir},${key || 'sin-medir'},${pay.value},${pay.source},${config.cycleSeconds},${kind}`);
   if (!key) return;
   if (kind === 'veto-rebote') {
-    reboundTally[key === 'win' ? 'wins' : key === 'loss' ? 'losses' : 'ties']++;
+    reboundTally[tallyKey(key)]++;
+    return;
+  }
+  if (/^martin/.test(kind)) {
+    martinTally[tallyKey(key)]++;
     return;
   }
   patternOps.push({ pattern, result: key, payout: pay.value });
@@ -261,6 +269,7 @@ function addPatternOp(now, { pattern, dir, result, kind }) {
 function loadPatternStats() {
   patternOps = [];
   reboundTally = { wins: 0, losses: 0, ties: 0 };
+  martinTally = { wins: 0, losses: 0, ties: 0 };
   try {
     const dir = path.join(app.getPath('userData'), 'registro');
     const files = fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}\.csv$/.test(f)).sort().slice(-PATTERN_DAYS);
@@ -269,7 +278,8 @@ function loadPatternStats() {
         if (!line.startsWith('P,')) continue;
         const [, , pattern, , result, payout, , seconds, kind] = line.split(',');
         if (Number(seconds) !== config.cycleSeconds || !['win', 'loss', 'tie'].includes(result)) continue;
-        if (kind === 'veto-rebote') reboundTally[result === 'win' ? 'wins' : result === 'loss' ? 'losses' : 'ties']++;
+        if (kind === 'veto-rebote') reboundTally[tallyKey(result)]++;
+        else if (/^martin/.test(kind || '')) martinTally[tallyKey(result)]++;
         else patternOps.push({ pattern, result, payout: Number(payout) });
       }
     }
@@ -633,7 +643,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -686,6 +696,7 @@ const badgeCounter = createBadgeCounter();
 let trades = { wins: 0, losses: 0, ties: 0, last: '' };
 let previousCandles = null; // para notar si la vista de la grafica salto
 let previousPhase = 'idle';
+let shownSignal = null; // la senal en curso (para notar cuando de una se pasa directo a su martingala)
 
 // ---------- IA opcional: hasta tres a la vez (ChatGPT, Gemini y Claude) ----------
 // Cada clave vive cifrada en disco y en memoria; nunca se envia al panel ni se escribe en logs.
@@ -929,6 +940,7 @@ function loadConfig() {
     if (typeof saved.patternVeto === 'boolean') config.patternVeto = saved.patternVeto;
     if (typeof saved.antiRebound === 'boolean') config.antiRebound = saved.antiRebound;
     if (typeof saved.internalSource === 'boolean') config.internalSource = saved.internalSource;
+    if (Number.isFinite(saved.martinLevels)) config.martinLevels = Math.max(0, Math.min(3, Math.round(saved.martinLevels)));
     if (Number.isFinite(saved.entryDelayMs)) config.entryDelayMs = Math.max(0, Math.min(ENTRY_MAX_MS, saved.entryDelayMs));
     if (typeof saved.asset === 'string') config.asset = saved.asset;
   } catch {
@@ -1012,6 +1024,10 @@ function publish(statusOverride) {
     // Tabla completa por patron (para el detalle) y lo medido en papel del veto anti-rebote.
     patterns: PATTERN_KEYS.filter((key) => patternTable[key]).map((key) => ({ ...patternTable[key], text: PATTERNS[key], off: Boolean(patternTable[key].vetoed && config.patternVeto) })),
     rebound: reboundTally,
+    // Seguimiento: como va la senal en curso, si se avisa martingala, y lo medido de las martingalas.
+    follow: last.follow || null,
+    martinLevels: config.martinLevels,
+    martin: martinTally,
     patternVeto: config.patternVeto,
     antiRebound: config.antiRebound,
     internalSource: config.internalSource,
@@ -1269,7 +1285,14 @@ async function scanTick() {
         // Vetos (15 nov 2026): anti-rebote y patrones desactivados por estadistica.
         antiRebote: config.antiRebound,
         vetoedPatterns: vetoedPatterns(),
+        // Seguimiento: si la senal pierde, sale una martingala en ese instante (hasta este tope).
+        martin: config.martinLevels,
       });
+      // Empieza una senal nueva / termina la anterior. Con seguimiento, de una senal que pierde se
+      // pasa directo a su martingala sin salir de la fase 'signal': por eso se mira si cambio la senal.
+      const signalStarted = last.phase === 'signal' && Boolean(last.signal) && (previousPhase !== 'signal' || last.signal !== shownSignal);
+      const signalEnded = previousPhase === 'signal' && (last.phase !== 'signal' || signalStarted);
+      shownSignal = last.phase === 'signal' ? last.signal : null;
       // Senales vetadas que acaban de medirse en papel: a la estadistica y al registro.
       for (const v of last.vetoResults || []) {
         addPatternOp(now, { pattern: v.pattern, dir: v.dir, result: v.result, kind: v.kind === 'patron' ? 'veto-patron' : 'veto-rebote' });
@@ -1300,7 +1323,7 @@ async function scanTick() {
       // mas su retraso de entrada). Sirve para dibujar la linea de entrada y decir, en vivo,
       // cuantos pips va a favor o en contra.
       // Al salir la senal se anota el precio de ese instante: ahi va la linea de COMPRA / VENTA sugerida.
-      if (last.phase === 'signal' && previousPhase !== 'signal') entry = { at: now, signalPrice: price, signalRow: priceY, price: null, taken: false };
+      if (signalStarted) entry = { at: now, signalPrice: price, signalRow: priceY, price: null, taken: false };
       if (last.phase !== 'signal') entry = null;
       if (entry && !entry.taken && now - entry.at >= entryMs() && price !== null) {
         entry.price = price;
@@ -1418,8 +1441,24 @@ async function scanTick() {
         };
       }
 
-      // Registro: cada senal que se da y como termino.
-      if (last.phase === 'signal' && previousPhase !== 'signal' && last.signal) {
+      // Registro: como termino la senal anterior y, si empieza otra, cual es.
+      if (signalEnded && last.lastResult) {
+        record(`R,${now},${last.lastResult.replace(/,/g, ' ')}`);
+        // Acierto medido por nivel de confianza (solo senales con lado).
+        if (openSignal && openSignal.dir && openSignal.martin) {
+          // Martingala de seguimiento: se anota aparte (tipo martin1, martin2...), no en la estadistica por patron.
+          addPatternOp(now, { pattern: openSignal.pattern, dir: openSignal.dir, result: last.lastResult, kind: `martin${openSignal.martin}` });
+        } else if (openSignal && openSignal.dir) {
+          countConfidence(openSignal.confidence, last.lastResult);
+          // Estadistica por patron: patron, pago de este momento y resultado (linea P del registro).
+          addPatternOp(now, { pattern: openSignal.pattern, dir: openSignal.dir, result: last.lastResult, kind: 'op' });
+        }
+        openSignal = null;
+        // Justo ahora la plataforma dibuja el globo del resultado: se guardan dos imagenes de la
+        // zona para poder revisar despues por que un globo se conto o no.
+        autoShots = [now + 600, now + 2200];
+      }
+      if (signalStarted) {
         lastSignalAt = now;
         // Ultimo campo: "cierre:N" = la senal vale hasta el cierre de la vela (le faltaban N s).
         const until = last.untilClose ? `cierre:${Math.round((last.remainingMs || 0) / 100) / 10}` : '';
@@ -1427,7 +1466,9 @@ async function scanTick() {
         const setup = last.signal.pattern ? last.signal.pattern.key : '';
         const veto = last.signal.veto;
         record(`S,${now},${last.signal.dir || 'wait'},${last.signal.source},${last.signal.confidence},${config.cycleSeconds},${regime && regime.kind ? regime.kind : ''},${until},${setup},${veto ? veto.kind : ''}`);
-        openSignal = { dir: last.signal.dir, confidence: last.signal.confidence, filled: false, pattern: setup || 'otro' };
+        openSignal = { dir: last.signal.dir, confidence: last.signal.confidence, filled: false, pattern: setup || 'otro', martin: last.signal.martin || 0 };
+        // E,ms,martingala,nivel,lado: entrada de seguimiento porque la senal anterior perdio.
+        if (last.signal.martin) record(`E,${now},martingala,${last.signal.martin},${last.signal.dir}`);
         // Cada veto queda en el registro con su motivo:
         //   E,ms,veto anti-rebote,lado,patron,velas:N cuerpos:a/b x despues:N retroceso:N % extremo
         //   E,ms,veto patron,lado,patron,motivo
@@ -1442,18 +1483,6 @@ async function scanTick() {
           photoOnSignal = false;
           setTimeout(saveScreenPhoto, 900); // con la senal y su zona ya dibujadas
         }
-      } else if (previousPhase === 'signal' && last.phase !== 'signal' && last.lastResult) {
-        record(`R,${now},${last.lastResult.replace(/,/g, ' ')}`);
-        // Acierto medido por nivel de confianza (solo senales con lado).
-        if (openSignal && openSignal.dir) {
-          countConfidence(openSignal.confidence, last.lastResult);
-          // Estadistica por patron: patron, pago de este momento y resultado (linea P del registro).
-          addPatternOp(now, { pattern: openSignal.pattern, dir: openSignal.dir, result: last.lastResult, kind: 'op' });
-        }
-        openSignal = null;
-        // Justo ahora la plataforma dibuja el globo del resultado: se guardan dos imagenes de la
-        // zona para poder revisar despues por que un globo se conto o no.
-        autoShots = [now + 600, now + 2200];
       }
       // Registro: el precio llego a la linea de entrada sugerida.
       if (last.phase === 'signal' && last.entry && last.entry.filled && openSignal && !openSignal.filled) {
@@ -1469,7 +1498,7 @@ async function scanTick() {
         record(`E,${now},analisis,${clockInfo && clockInfo.elapsedMs !== null ? Math.round(clockInfo.elapsedMs / 100) / 10 : ''}`);
       }
       // Marcador de cada IA: al terminar la senal se sabe hacia donde fue el precio de verdad.
-      if (previousPhase === 'signal' && last.phase !== 'signal' && council.voted && council.votedDir) {
+      if (signalEnded && council.voted && council.votedDir) {
         const opposite = council.votedDir === 'up' ? 'down' : 'up';
         const actual = last.lastResult === 'acertó' ? council.votedDir : last.lastResult === 'falló' ? opposite : null;
         scoreVotes(council.scores, council.voted, actual);
@@ -1479,7 +1508,7 @@ async function scanTick() {
       }
       // Empieza una senal: se anota lo que dijo cada IA (para su marcador). Las respuestas ya
       // usadas, o una consulta que no llego a tiempo, dejan de servir.
-      if (last.phase === 'signal' && previousPhase !== 'signal') {
+      if (signalStarted) {
         // Registro para poder revisar despues POR QUE salio cada senal (no cambia nada de la senal):
         //   A,ms,ia,lado,confianza,razon     lo que dijo cada IA
         //   M,ms,razon                        el motivo final que mostro el panel
@@ -1547,7 +1576,10 @@ async function scanTick() {
     // Mientras se escanea se lee la pantalla sin pausas (unas 5 veces por segundo), para que el
     // seguimiento de la vela actual sea lo mas fino posible. Tambien mientras se espera a que abra
     // la vela siguiente: asi el analisis arranca en cuanto abre.
-    if ((scanningNow() || last.phase === 'waiting') && auto && config.region) setTimeout(scanTick, 15);
+    // Con seguimiento, tampoco se deja de leer mientras dura la senal: asi se ve en el momento si va
+    // ganando o perdiendo y la martingala sale en cuanto pierde.
+    const following = config.martinLevels > 0 && last.phase === 'signal' && last.signal && last.signal.dir;
+    if ((scanningNow() || last.phase === 'waiting' || following) && auto && config.region) setTimeout(scanTick, 15);
   }
 }
 
@@ -1707,6 +1739,15 @@ ipcMain.on('set-asset', (_e, value) => {
 // Dar siempre ARRIBA o ABAJO (true) o permitir ESPERAR cuando no hay lectura clara (false).
 ipcMain.on('set-always', (_e, value) => {
   config.alwaysSignal = Boolean(value);
+  saveConfig();
+  publish();
+});
+
+// Seguimiento: cuantas martingalas seguidas se dan cuando una senal pierde (0 = ninguna).
+ipcMain.on('set-martin', (_e, value) => {
+  const levels = Math.round(Number(value));
+  if (!Number.isFinite(levels) || levels < 0 || levels > 3) return;
+  config.martinLevels = levels;
   saveConfig();
   publish();
 });

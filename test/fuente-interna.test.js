@@ -125,7 +125,7 @@ const fakeImage = () => ({
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'lector-fuente-'));
 fs.writeFileSync(
   path.join(userData, 'config.json'),
-  JSON.stringify({ pauseSeconds: 0, cycleSeconds: 3, manual: true, alwaysSignal: true, asset: 'EUR/USD OTC', payout: 92, antiRebound: false, patternVeto: false }),
+  JSON.stringify({ pauseSeconds: 0, cycleSeconds: 3, manual: true, alwaysSignal: true, asset: 'EUR/USD OTC', payout: 92, antiRebound: false, patternVeto: false, martinLevels: 0 }),
 );
 // La ventana de la fuente interna: su depurador entrega aquí los mensajes del websocket.
 const terminal = { listener: null, url: null, visible: false, pay: 'Payout\n+58%\n+$15.80', sym: 'EUR/USD OTC', scripts: [] };
@@ -387,6 +387,53 @@ test('si lo que llega no cuadra con la gráfica de la pantalla, la fuente intern
   // Y al volver a verse la gráfica correcta, se recupera sola.
   for (let i = 0; i < 12; i++) ({ s } = await read());
   assert.equal(s.source.active, 'INTERNA');
+});
+
+test('seguimiento: cuando una señal pierde, el panel da la martingala en esa misma lectura y la mide aparte', async () => {
+  handlers['set-martin'](null, 1);
+  let s = null;
+  for (let i = 0; i < 6; i++) ({ s } = await read());
+  assert.equal(s.source.active, 'INTERNA');
+  assert.equal(s.martinLevels, 1);
+  let martin = null;
+  for (let tries = 0; tries < 40 && !martin; tries++) {
+    handlers.predict();
+    await Promise.resolve();
+    let step = null;
+    do step = await read();
+    while (step.s.phase !== 'signal');
+    assert.ok(step.s.follow, 'la señal en curso trae su seguimiento');
+    const first = step.s.signal;
+    let previous = step.s;
+    for (;;) {
+      step = await read();
+      if (step.s.phase !== 'signal') break;
+      if (step.s.signal.source === 'martingala') {
+        martin = { state: step.s, lost: first, before: previous };
+        break;
+      }
+      previous = step.s;
+    }
+    while (step.s.phase === 'signal') step = await read(); // deja terminar lo que esté en curso
+  }
+  assert.ok(martin, 'en 40 predicciones alguna perdió y dio martingala');
+  assert.equal(martin.state.lastResult, 'falló'); // la señal anterior perdió…
+  assert.equal(martin.state.signal.martin, 1); // …y en esa misma lectura ya está la martingala
+  assert.ok(['up', 'down'].includes(martin.state.signal.dir));
+  assert.equal(martin.state.ready, false);
+  // Justo antes iba perdiendo y el panel ya avisaba hacia dónde saldría.
+  assert.equal(martin.before.follow.state, 'perdiendo');
+  assert.ok(martin.before.follow.next && martin.before.follow.next.level === 1);
+  const log = records();
+  // La señal que perdió queda cerrada con su resultado y su línea P, y enseguida la martingala.
+  assert.match(log, new RegExp(`\\nR,\\d+,falló\\nP,\\d+,\\w+,${martin.lost.dir},loss,\\d+,\\w+,3,op\\n`));
+  assert.match(log, new RegExp(`\\nS,\\d+,${martin.state.signal.dir},martingala,baja,3,`));
+  assert.match(log, new RegExp(`\\nE,\\d+,martingala,1,${martin.state.signal.dir}\\n`));
+  assert.match(log, /\nP,\d+,\w+,(up|down),(win|loss|tie),\d+,\w+,3,martin1\n/);
+  // Las martingalas se cuentan aparte, no en la estadística por patrón.
+  s = state();
+  assert.ok(s.martin.wins + s.martin.losses + s.martin.ties >= 1);
+  handlers['set-martin'](null, 0);
 });
 
 test('si la terminal está en otro par, el panel la pone sola en el par que se opera', async () => {

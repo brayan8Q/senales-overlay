@@ -56,6 +56,15 @@ const AI_STREAK_BRAKE = 4;
 const NO_SIGNAL_MS = 10000;
 // Si todavia no se sabe cuanto dura la vela, solo se arranca recien visto un cierre.
 const UNKNOWN_CANDLE_START_MS = 2000;
+// SEGUIMIENTO (martingala, 15 nov 2026): la senal no se suelta al salir. Mientras dura se sigue
+// escaneando y se dice como va (ganando / perdiendo). Si va perdiendo en su tramo final se avisa
+// hacia donde saldria la martingala; y si termina perdiendo, la martingala sale en ese mismo
+// instante, sin pausa ni consulta a la IA: hacia donde va el precio AHORA (lo que se esta
+// escaneando) y, si no se ve claro, hacia donde se fue en la operacion perdida.
+// El aviso previo aparece en el ultimo cuarto de la senal (o en sus ultimos 1.5 s, lo que sea mas).
+const MARTIN_ALERT_MS = 1500;
+const MARTIN_ALERT_PART = 0.25;
+const OPPOSITE = { up: 'down', down: 'up' };
 
 /** Precio relativo a un grupo de velas: 0 = su minimo, 1 = su maximo. */
 function relativePrice(priceY, candles) {
@@ -305,6 +314,8 @@ function createTimedTracker() {
   let lastResult = '';
   // Senales vetadas que se siguen midiendo en papel: { kind, dir, pattern, mark, time, dueAt }
   let shadows = [];
+  // Seguimiento: la senal anterior perdio y toca martingala: { level, lostDir }
+  let nextMartin = null;
 
   /**
    * Marca el precio de ahora. De dos maneras, la que se pueda:
@@ -428,6 +439,8 @@ function createTimedTracker() {
      *        recien hecha (ver rebound.js). La senal vetada queda en ESPERAR y se mide en papel.
      * @param {Object<string,string>} [input.vetoedPatterns]  Patrones desactivados por estadistica:
      *        { clave: motivo }. Una senal de esos patrones queda en ESPERAR y se mide en papel.
+     * @param {number} [input.martin]  Seguimiento: cuantas martingalas seguidas se dan como mucho
+     *        cuando una senal pierde (0 = ninguna).
      * @param {{known:boolean, seconds:number, elapsedMs:number|null, remainingMs:number|null,
      *          closedNow:boolean, closeRow:number|null}} [input.candle]  Reloj de la vela en curso
      *        (ver candleclock.js). closedNow = acaba de cerrar una vela; closeRow = fila del cierre
@@ -457,6 +470,7 @@ function createTimedTracker() {
       candle = null,
       antiRebote = false,
       vetoedPatterns = null,
+      martin = 0,
     }) {
       const completed = candles.slice(0, -1);
       const aligned = Boolean(align) && manual; // solo con el boton PREDECIR
@@ -548,6 +562,11 @@ function createTimedTracker() {
             lastResult = 'falló';
           }
         }
+        // Seguimiento: la senal perdio y quedan martingalas por dar: sale otra entrada enseguida (paso 2c).
+        nextMartin = null;
+        if (martin > 0 && pending.dir && lastResult === 'falló' && (pending.level || 0) < martin) {
+          nextMartin = { level: (pending.level || 0) + 1, lostDir: pending.dir };
+        }
         pending = null;
         observed = false; // toca analizar antes de la siguiente
         armed = false; // en modo manual hay que volver a pulsar
@@ -605,6 +624,60 @@ function createTimedTracker() {
           hold = true;
         }
       } else if (waiting) waiting = null;
+
+      /** Zona de entrada sugerida (ver entry.js) para una senal hacia `dir` marcada en `mark`. */
+      const zonePlan = (dir, mark) => {
+        const ranges = completed.slice(-20).map((c) => c.high - c.low).sort((a, b) => a - b);
+        const zone = suggestZone({ dir, priceY, forming: candles[candles.length - 1], unit: ranges[Math.floor((ranges.length - 1) / 2)] || 0 });
+        const best = zone ? markAtRow(zone.bestRow, priceY, completed, quote) : null;
+        const limit = zone ? markAtRow(zone.limitRow, priceY, completed, quote) : null;
+        return best && limit ? { mark, best, limit, kind: 'zona', text: zone.text, filled: true, filledAt: now } : null;
+      };
+
+      // 2c) SEGUIMIENTO (martingala): la senal anterior acaba de perder. Sin pausa ni consulta, sale
+      //     otra entrada en este mismo instante: hacia donde va el precio ahora; si el movimiento de
+      //     los ultimos segundos no se ve claro, hacia donde se fue el precio en la operacion perdida.
+      if (nextMartin && !pending) {
+        const follow = nextMartin;
+        nextMartin = null;
+        const mark = status === 'ok' ? markNow(priceY, completed, quote) : null;
+        if (mark) {
+          const liveNow = tickMomentum(recentTicks, now);
+          const dir = liveNow.vote > 0 ? 'up' : liveNow.vote < 0 ? 'down' : OPPOSITE[follow.lostDir];
+          const trend = trendSignal(candles);
+          const why = liveNow.vote !== 0 ? `ahora el precio va ${liveNow.text}` : `el precio se fue hacia ${dir === 'up' ? 'arriba' : 'abajo'}`;
+          watching = null;
+          observed = false;
+          armed = false;
+          pending = {
+            dir,
+            mark,
+            time: now,
+            entryMs: 0,
+            entered: true,
+            untilClose: false,
+            spanMs: cycleMs,
+            entry: suggest ? zonePlan(dir, mark) : null,
+            maxWaitMs: 0,
+            graceMs: 0,
+            level: follow.level, // 1 = primera martingala
+            info: {
+              dir,
+              trend: trend.trend,
+              rsi: trend.rsi,
+              reason: `Martingala ${follow.level}: la señal ${follow.lostDir === 'up' ? 'ARRIBA' : 'ABAJO'} perdió y ${why}.`,
+              confidence: 'baja',
+              readings: null,
+              source: 'martingala',
+              martin: follow.level,
+              braked: false,
+              pattern: patternOf({ candles, dir }),
+              veto: null,
+              untilClose: false,
+            },
+          };
+        }
+      }
 
       // 3) Sin senal ni analisis en curso: empieza lo que toque (en manual, solo si se pidio).
       if (!hold && !pending && !watching && status === 'ok' && (!manual || armed)) {
@@ -726,14 +799,7 @@ function createTimedTracker() {
           // Zona de entrada sugerida (ver entry.js): dos lineas, la del mejor precio (la orilla) y la
           // limite. El precio de la senal queda dentro, asi que la entrada de referencia es la de
           // este instante (`mark`): desde ahi se mide la senal.
-          let entryPlan = null;
-          if (suggest && dir) {
-            const ranges = completed.slice(-20).map((c) => c.high - c.low).sort((a, b) => a - b);
-            const zone = suggestZone({ dir, priceY, forming: current, unit: ranges[Math.floor((ranges.length - 1) / 2)] || 0 });
-            const best = zone ? markAtRow(zone.bestRow, priceY, completed, quote) : null;
-            const limit = zone ? markAtRow(zone.limitRow, priceY, completed, quote) : null;
-            if (best && limit) entryPlan = { mark, best, limit, kind: 'zona', text: zone.text, filled: true, filledAt: now };
-          }
+          const entryPlan = suggest && dir ? zonePlan(dir, mark) : null;
           pending = {
             dir,
             mark,
@@ -824,6 +890,21 @@ function createTimedTracker() {
         live: summarize(live, payout),
         // Senales vetadas que acaban de medirse en papel: [{ kind, dir, pattern, time, result }]
         vetoResults,
+        // Seguimiento de la senal en curso: como va en este instante (state) y, si va perdiendo en
+        // su tramo final y quedan martingalas, hacia donde saldria la siguiente (next).
+        follow: (() => {
+          if (!pending || !pending.dir) return null;
+          const move = clean ? moveSince(pending.mark, priceY, completed, quote) : null;
+          const state = move === null ? null : move === 'flat' ? 'igual' : move === pending.dir ? 'ganando' : 'perdiendo';
+          const level = pending.level || 0;
+          let next = null;
+          const closing = remainingMs <= Math.max(MARTIN_ALERT_MS, pending.spanMs * MARTIN_ALERT_PART);
+          if (martin > 0 && state === 'perdiendo' && level < martin && closing) {
+            const liveNow = tickMomentum(recentTicks, now);
+            next = { level: level + 1, dir: liveNow.vote > 0 ? 'up' : liveNow.vote < 0 ? 'down' : OPPOSITE[pending.dir] };
+          }
+          return { state, level, max: martin, next };
+        })(),
         visible: null, // el repaso por velas no aplica a este modo
       };
     },
@@ -850,6 +931,7 @@ function createTimedTracker() {
       armed = false;
       waiting = null;
       shadows = [];
+      nextMartin = null;
     },
   };
 }

@@ -130,6 +130,7 @@ $('pattern-veto').addEventListener('change', (e) => api.setPatternVeto(e.target.
 $('anti-rebound').addEventListener('change', (e) => api.setAntiRebound(e.target.checked));
 $('internal-source').addEventListener('change', (e) => api.setInternalSource(e.target.checked));
 $('btn-visor').addEventListener('click', () => api.toggleVisor());
+$('martin').addEventListener('change', (e) => api.setMartin(Number(e.target.value)));
 
 // IA: tres proveedores, cada uno con su clave. Los de ChatGPT conservan sus ids de siempre.
 const AI_BLOCKS = [
@@ -504,11 +505,14 @@ api.onState((s) => {
     // Una señal de confianza baja se ve rayada: el panel eligió un lado sin lectura clara.
     const low = Boolean(dir) && s.signal.confidence === 'baja';
     $('signal').className = (dir || 'wait') + (low ? ' low' : '');
-    $('signal-label').textContent = SIGNAL_TEXT[dir] || 'ESPERAR';
+    // Martingala de seguimiento: se dice así, con su lado.
+    const martin = s.signal && s.signal.source === 'martingala';
+    $('signal-label').textContent = martin ? (dir === 'up' ? 'MARTIN SUBE ▲' : 'MARTIN BAJA ▼') : SIGNAL_TEXT[dir] || 'ESPERAR';
     $('signal-detail').textContent = s.signal ? s.signal.reason : '';
     $('signal-detail').title = s.signal ? s.signal.reason : '';
     let source = s.signal && s.signal.source ? (s.signal.source === 'ia' ? 'IA' : 'reglas') : '';
     if (source && dir && s.signal.confidence) source += ` · ${s.signal.confidence}`;
+    if (martin) source = `martingala ${s.signal.martin}${s.martinLevels > 1 ? ` de ${s.martinLevels}` : ''}`;
     // Señal vetada: se dice qué veto fue y hacia dónde iba.
     if (s.veto) source = `${s.veto.kind === 'patron' ? 'patrón desactivado' : 'veto anti-rebote'} · iba ${s.veto.dir === 'up' ? 'ARRIBA' : 'ABAJO'}`;
     $('signal-source').textContent = source;
@@ -518,16 +522,20 @@ api.onState((s) => {
   // confianza (alta / media / baja) sigue arriba, junto a quién dio la señal, pero ya no es el criterio:
   // medido en 164 operaciones, no separaba las ganadoras de las perdedoras.
   const showing = !waiting && !resting && !analyzing;
+  // "MARTIN SUBE ▲" lleva la letra un poco menor para caber en una línea.
+  $('signal-label').classList.toggle('martin', showing && Boolean(s.signal && s.signal.source === 'martingala'));
   const pat = showing ? s.pattern : null;
   const pct = $('signal-pct');
   const note = $('signal-pct-note');
   note.classList.toggle('hidden', !pat);
   if (pat) {
-    pct.className = pat.accuracy === null ? '' : pat.accuracy >= pat.breakEven ? 'good' : 'bad';
-    pct.textContent = pat.accuracy === null ? '— %' : `${Math.round(pat.accuracy)} %`;
+    // Con menos de 10 operaciones medidas el porcentaje no dice nada (2 de 2 sería "100 %"): no se muestra.
+    const enough = pat.accuracy !== null && pat.decided >= 10;
+    pct.className = !enough ? '' : pat.accuracy >= pat.breakEven ? 'good' : 'bad';
+    pct.textContent = enough ? `${Math.round(pat.accuracy)} %` : '— %';
     const money = `${pat.pnl > 0 ? '+' : ''}${pat.pnl.toFixed(2)}`;
     let text = pat.decided
-      ? `${pat.text} · ${pat.decided} op. · P&L ${money}${pat.decided < 20 ? ' · pocas' : ` · mín. ${pat.breakEven} %`}`
+      ? `${pat.text} · ${pat.decided} op. · P&L ${money}${pat.decided < 10 ? ' · aún pocas para medir' : pat.decided < 20 ? ' · pocas' : ` · mín. ${pat.breakEven} %`}`
       : `${pat.text} · aún sin operaciones medidas`;
     if (pat.vetoed) text += ' · DESACTIVADO por estadística';
     note.textContent = text;
@@ -540,6 +548,19 @@ api.onState((s) => {
     $('signal-entry').classList.toggle('taken', plan.zone ? plan.inZone !== false : plan.filled);
     if (plan.zone) $('signal-entry').textContent = plan.inZone === false ? 'precio FUERA de la zona de entrada' : 'precio DENTRO de la zona de entrada';
     else $('signal-entry').textContent = plan.filled ? `✔ entrada tomada en la línea (${plan.kind})` : `espera el precio en la línea · ${plan.kind}`;
+  }
+  // Seguimiento: cómo va la señal en este instante y, si va perdiendo al final, la martingala que viene.
+  const follow = showing && dir ? s.follow : null;
+  const line = $('signal-follow');
+  line.classList.toggle('hidden', !follow || !follow.state);
+  if (follow && follow.state) {
+    if (follow.next) {
+      line.className = 'alert';
+      line.textContent = `VA PERDIENDO · prepara MARTIN ${follow.next.dir === 'up' ? 'SUBE ▲' : 'BAJA ▼'}`;
+    } else {
+      line.className = follow.state === 'ganando' ? 'win' : follow.state === 'perdiendo' ? 'lose' : '';
+      line.textContent = follow.state === 'ganando' ? 'va ganando' : follow.state === 'perdiendo' ? 'va perdiendo' : 'va igual';
+    }
   }
   renderProgress(s);
 
@@ -609,6 +630,9 @@ api.onState((s) => {
       table.appendChild(line);
     }
   }
+  const mt = s.martin || { wins: 0, losses: 0, ties: 0 };
+  $('martin-line').classList.toggle('hidden', mt.wins + mt.losses + mt.ties === 0);
+  $('martin-line').textContent = `Martingalas: ganaron ${mt.wins}, perdieron ${mt.losses}${mt.ties ? `, empates ${mt.ties}` : ''}`;
   const rb = s.rebound || { wins: 0, losses: 0, ties: 0 };
   const blocked = rb.wins + rb.losses + rb.ties;
   $('rebound-line').classList.toggle('hidden', blocked === 0);
@@ -692,6 +716,7 @@ api.onState((s) => {
   if (document.activeElement !== $('cycle')) $('cycle').value = s.cycleSeconds;
   if (document.activeElement !== $('pause')) $('pause').value = s.pauseSeconds;
   $('always').checked = s.alwaysSignal;
+  if (document.activeElement !== $('martin')) $('martin').value = s.martinLevels === undefined ? 1 : s.martinLevels;
   $('pattern-veto').checked = s.patternVeto !== false;
   $('anti-rebound').checked = s.antiRebound !== false;
   $('internal-source').checked = s.internalSource !== false;

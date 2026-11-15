@@ -117,6 +117,21 @@ Tres cambios. Ninguno manda órdenes ni toca una cuenta: el panel sigue siendo s
 - Se apaga en ⚙ («Leer precios de la fuente interna»). «Ver / ocultar fuente interna» muestra esa ventana.
 - Antes de usarlo con una cuenta, revisa las reglas de la plataforma sobre programas que leen su página.
 
+### 4. Seguimiento de la señal con martingala (`src/timed.js`)
+
+- La señal ya no se suelta al salir: mientras dura, el panel sigue leyendo sin pausas y dice cómo va
+  (**va ganando / va perdiendo / va igual**).
+- Si va perdiendo en su tramo final (último cuarto, o últimos 1.5 s), avisa en amarillo
+  **«VA PERDIENDO · prepara MARTIN SUBE ▲ / BAJA ▼»**.
+- Si la señal termina perdiendo, en esa misma lectura sale la martingala (**MARTIN SUBE ▲ / MARTIN BAJA ▼**),
+  sin pausa de análisis ni consulta a la IA: hacia donde va el precio en ese instante; si el movimiento de los
+  últimos segundos no se ve claro, hacia donde se fue el precio en la operación perdida. Se mide igual que una señal.
+- En ⚙, «Martingalas de seguimiento»: cuántas seguidas como mucho (1 por defecto; 0 = sin seguimiento; máximo 3).
+- Registro: `E,ms,martingala,nivel,lado` y su resultado en `P,…,martin1` (`martin2`…). Se cuentan aparte de la
+  estadística por patrón; el detalle (▾) dice cuántas ganaron y perdieron.
+- El panel no dice cuánto apostar. La martingala no sube el acierto: es otra entrada, y recuperar una pérdida
+  exige apostar más (con pago de 52 %, 1.92 veces lo perdido solo para quedar en cero).
+
 ### Validación con el registro real (`node tools/validar-historico.js`)
 
 Rearma las velas de 15 s con el precio registrado y aplica las mismas funciones del panel a las señales ya
