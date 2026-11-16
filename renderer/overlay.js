@@ -523,9 +523,11 @@ api.onState((s) => {
 
   if (waiting) {
     $('signal').className = 'waiting';
-    $('signal-label').textContent = 'ESPERANDO LA SIGUIENTE VELA';
+    $('signal-label').textContent = s.newCandle ? (s.skipReason ? 'SIN ENTRADA EN ESTA VELA' : 'SIGUIENDO ESTA VELA') : 'ESPERANDO LA SIGUIENTE VELA';
     if (s.newCandle) {
-      $('signal-detail').textContent = `La predicción sale al abrir la vela nueva${s.clockKnown ? ` (en ${Math.ceil(s.remainingMs / 1000)} s)` : ''}.`;
+      const next = `Próxima predicción al abrir la siguiente${s.clockKnown ? ` (en ${Math.ceil(s.remainingMs / 1000)} s)` : ''}.`;
+      $('signal-detail').textContent = s.skipReason ? `${s.skipReason} ${next}` : next;
+      $('signal-detail').title = s.skipReason || '';
     } else {
       $('signal-detail').textContent = s.clockKnown
         ? `La vela en curso ya va avanzada. La nueva abre en ${Math.ceil(s.remainingMs / 1000)} s: ahí empiezo el análisis.`
@@ -544,13 +546,13 @@ api.onState((s) => {
     // Con la señal al abrir la vela, a media vela NO hay predicción: solo se espera la vela nueva
     // (el análisis corre por dentro). Así no parece que se predice a media vela.
     const atOpen = s.newCandle && s.clockKnown;
-    $('signal-label').textContent = atOpen ? 'ESPERANDO LA SIGUIENTE VELA' : s.thinking ? `MARTINGALA ${s.thinking}` : 'ANALIZANDO';
+    $('signal-label').textContent = atOpen ? (s.thinking ? `MARTINGALA ${s.thinking} AL ABRIR` : 'PREPARANDO LA PREDICCIÓN') : s.thinking ? `MARTINGALA ${s.thinking}` : 'ANALIZANDO';
     if (s.thinking) {
       $('signal-detail').textContent = atOpen
         ? `La señal perdió. La martingala ${s.thinking} entra al abrir la vela nueva (en ${Math.ceil(s.remainingMs / 1000)} s). Sigo escaneando.`
         : `La señal perdió. Sigo escaneando y analizo la martingala ${s.thinking}.`;
     } else if (atOpen) {
-      $('signal-detail').textContent = 'Revisando la vela en curso. La predicción sale al abrir la vela nueva.';
+      $('signal-detail').textContent = 'Revisando cómo cierra esta vela. La predicción sale al abrir la siguiente.';
     } else {
       $('signal-detail').textContent = s.ai.enabled ? 'Leyendo las velas y consultando a la IA.' : 'Leyendo las velas y el movimiento del precio.';
     }
