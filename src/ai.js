@@ -195,6 +195,9 @@ const PROMPT_INTRO =
   'estadística que mejor encaja con una operación corta. ' +
   'Si viene "tu_respuesta_tarda", tenlo en cuenta: los datos son de ahora, pero la operación se abrirá esos ' +
   'segundos después; lo que importa es hacia dónde irá el precio a partir de entonces. ' +
+  'Si viene "cuando_se_abre_la_operacion", manda sobre lo anterior: la orden NO se coloca al responder sino en ' +
+  'el momento que ahí se indica (normalmente cuando cierra la vela en curso y abre la siguiente). Predice el ' +
+  'tramo que empieza en ese momento, y ten presente que la vela en curso todavía puede cambiar en lo que le falta. ' +
   'Si viene "tus_ultimas_predicciones" (lo que predijiste antes en esta misma gráfica ' +
   'y lo que pasó), úsalo para corregirte: si vienes fallando hacia el mismo lado o con el mismo ' +
   'razonamiento, cámbialo; si vienes acertando, mantén el criterio. No lo uses para adivinar rachas ("ya ' +

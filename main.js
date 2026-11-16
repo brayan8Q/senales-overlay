@@ -27,6 +27,7 @@ const { measureRegime } = require('./src/regime');
 const { createMarketMemory, segmentsOf, segmentCount } = require('./src/memory');
 const { costOf } = require('./src/prices');
 const { summarize, patternStats, breakEvenOf, PATTERN_VETO_MIN } = require('./src/score');
+const { candleSeen, candleChange, askMoment } = require('./src/lastcandle');
 const { findResultBadges, viewJumped, createBadgeCounter } = require('./src/badges');
 const { MIN_CANDLES } = require('./src/signal');
 const { describeChart } = require('./src/ai');
@@ -62,6 +63,12 @@ const SCAN_INTERVAL_MS = 300; // cada cuanto se lee la pantalla (velas y linea d
 const AI_MIN_PAUSE_SECONDS = 3; // la IA necesita al menos este tiempo para contestar
 const AI_LEAD_MS = 2500; // modo automatico: la consulta sale este tiempo antes de que termine la senal
 const AI_MANUAL_EXTRA_MS = 5000; // modo manual: cuanto mas se espera a la IA pasada la pausa
+// PREGUNTA TARDE (15 nov 2026, tarde; ver src/lastcandle.js): con la senal saliendo al abrir la
+// vela, a las IA no se les pregunta al empezar el analisis (segundo 10 de 15: no veian el ultimo
+// tercio de la vela) sino cuando a la vela le falta esto. Ven el 80 % y siguen contestando a
+// tiempo: ese dia, 187 de 188 consultas a gpt-4.1-mini tardaron menos de 2.6 s.
+const AI_ASK_BEFORE_CLOSE_MS = 3000;
+const AI_ANSWER_GRACE_MS = 400; // askCouncil descuenta esto de la ventana: asi el plazo llega hasta que sale la senal
 // Retraso de entrada: lo que tarda el usuario en poner la orden despues de ver la senal. Se
 // estima solo, comparando cuando aparece la senal con cuando la plataforma muestra el globo
 // del resultado (ese globo sale al cerrar la operacion, es decir, entrada + duracion).
@@ -239,7 +246,7 @@ function confidenceOf(signal) {
 // 20+ operaciones y acierto por debajo de su punto de equilibrio queda vetado (si el veto esta
 // encendido): sus senales salen como ESPERAR y se siguen midiendo en papel.
 //   P,ms,patron,lado,resultado,pago,fuente del pago,segundos,tipo
-//   tipo: op = senal mostrada · veto-patron / veto-rebote = senal vetada, medida en papel
+//   tipo: op = senal mostrada · veto-patron / veto-rebote / veto-vela = senal vetada, medida en papel
 const PATTERN_DAYS = 30; // dias de registro que se leen al abrir
 let patternOps = []; // operaciones que cuentan para la estadistica: { pattern, result, payout }
 let patternTable = {}; // patternStats(patternOps)
@@ -247,6 +254,9 @@ let patternTable = {}; // patternStats(patternOps)
 let reboundTally = { wins: 0, losses: 0, ties: 0 };
 // Martingalas de seguimiento ya medidas (se cuentan aparte: no son senales del analisis).
 let martinTally = { wins: 0, losses: 0, ties: 0 };
+// Senales frenadas por la confirmacion con la vela cerrada (la vela cambio de color despues de que
+// la IA la miro), medidas en papel: cuantas habrian ganado o perdido. No cuentan para los patrones.
+let candleTally = { wins: 0, losses: 0, ties: 0 };
 const tallyKey = (key) => (key === 'win' ? 'wins' : key === 'loss' ? 'losses' : 'ties');
 const resultKey = (text) => (/^acert/.test(text) ? 'win' : /^fall/.test(text) ? 'loss' : /^empate/.test(text) ? 'tie' : null);
 // Pago que muestra la terminal demo para el par (fuente interna): { value, at, symbol }.
@@ -272,6 +282,10 @@ function addPatternOp(now, { pattern, dir, result, kind, paid = null }) {
     reboundTally[tallyKey(key)]++;
     return;
   }
+  if (kind === 'veto-vela') {
+    candleTally[tallyKey(key)]++;
+    return;
+  }
   if (/^martin/.test(kind)) {
     martinTally[tallyKey(key)]++;
     return;
@@ -285,6 +299,7 @@ function loadPatternStats() {
   patternOps = [];
   reboundTally = { wins: 0, losses: 0, ties: 0 };
   martinTally = { wins: 0, losses: 0, ties: 0 };
+  candleTally = { wins: 0, losses: 0, ties: 0 };
   try {
     const dir = path.join(app.getPath('userData'), 'registro');
     const files = fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}\.csv$/.test(f)).sort().slice(-PATTERN_DAYS);
@@ -294,6 +309,7 @@ function loadPatternStats() {
         const [, , pattern, , result, payout, , seconds, kind] = line.split(',');
         if (Number(seconds) !== config.cycleSeconds || !['win', 'loss', 'tie'].includes(result)) continue;
         if (kind === 'veto-rebote') reboundTally[tallyKey(result)]++;
+        else if (kind === 'veto-vela') candleTally[tallyKey(result)]++;
         else if (/^martin/.test(kind || '')) martinTally[tallyKey(result)]++;
         else patternOps.push({ pattern, result, payout: Number(payout) });
       }
@@ -670,7 +686,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15k la IA mira la ultima vela casi completa (pregunta en el segundo 12 de 15) · confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -809,6 +825,7 @@ for (const id of PROVIDER_ORDER) {
 // El "consejo": lo que contesto cada IA para la proxima senal, y el marcador de cada una.
 const council = {
   asked: false, // ya se les pregunto en este ciclo
+  seen: null, // la vela en curso tal como estaba al preguntar (ver src/lastcandle.js)
   requestId: 0,
   deadlineAt: 0, // hasta cuando se espera a las que faltan
   answers: {}, // por IA: { dir, confidence, reason, name }
@@ -949,11 +966,14 @@ function horizonSeconds() {
  * Pide su opinion a todas las IA activas a la vez, con los mismos numeros.
  * @param {number} windowMs  Tiempo que falta para dar la senal: es lo que tienen para contestar.
  */
-function askCouncil(candles, moves, ticks, windowMs, readings = null) {
+function askCouncil(candles, moves, ticks, windowMs, readings = null, timing = null) {
   council.answers = {};
   const ids = enabledAis().filter((id) => !ais[id].busy);
   if (ids.length === 0 || candles.length < MIN_CANDLES) return;
-  if (windowMs < AI_MIN_PAUSE_SECONDS * 1000) {
+  // (Con `timing` la ventana ya esta medida contra el momento en que sale la senal: no aplica el
+  // minimo de la pausa. Sin esto, la martingala analizada de la version j nunca llego a preguntar:
+  // su ventana de 2.5 s quedaba por debajo del minimo de 3 s.)
+  if (!timing && windowMs < AI_MIN_PAUSE_SECONDS * 1000) {
     for (const id of ids) ais[id].status = `IA en espera: pon la pausa de análisis en ${AI_MIN_PAUSE_SECONDS} s o más para darle tiempo.`;
     return;
   }
@@ -981,6 +1001,17 @@ function askCouncil(candles, moves, ticks, windowMs, readings = null) {
       'la operacion vale hasta el CIERRE de la vela en curso (le faltan los segundos indicados en "segundos_a_predecir"): ' +
       'di si la vela cerrara por encima (up) o por debajo (down) del precio del momento de tu respuesta';
   }
+  // PREGUNTA TARDE: se les dice cuando se abrira de verdad la operacion (no cuando contesten).
+  if (timing) {
+    snapshot.cuando_se_abre_la_operacion = {
+      en_segundos: Math.round(timing.opensInMs / 100) / 10,
+      explicacion: timing.atCandleOpen
+        ? 'la operacion NO se abre cuando respondes: se abre cuando CIERRE la vela en curso y abra la siguiente (en esos segundos). ' +
+          `Predice donde estara el precio ${config.cycleSeconds} segundos despues de esa apertura, respecto al precio de esa apertura. ` +
+          'La vela en curso todavia puede cambiar en lo que le falta: fijate hacia donde va cerrando'
+        : `la operacion se abre en esos segundos: predice donde estara el precio ${config.cycleSeconds} segundos despues de ese momento, respecto al precio de ese momento`,
+    };
+  }
   // A cada IA se le agregan SUS predicciones anteriores en esta grafica y lo que paso despues:
   // no recuerdan nada entre consultas, asi que es la unica forma de que puedan corregirse.
   for (const id of ids) {
@@ -989,7 +1020,7 @@ function askCouncil(candles, moves, ticks, windowMs, readings = null) {
     if (feedback) personal.tus_ultimas_predicciones = feedback;
     // La operacion se abre cuando llega la respuesta, no cuando se pregunta: se le dice cuanto
     // suele tardar para que prediga el tramo que empieza entonces.
-    if (ais[id].lastMs) {
+    if (ais[id].lastMs && !timing) {
       personal.tu_respuesta_tarda = {
         segundos: Math.round((ais[id].lastMs + entryMs()) / 100) / 10,
         explicacion:
@@ -1121,6 +1152,10 @@ function publish(statusOverride) {
     // Tabla completa por patron (para el detalle) y lo medido en papel del veto anti-rebote.
     patterns: PATTERN_KEYS.filter((key) => patternTable[key]).map((key) => ({ ...patternTable[key], text: PATTERNS[key], off: Boolean(config.patternVeto && patternOff(patternTable[key]) !== null) })),
     rebound: reboundTally,
+    // Lo medido en papel de la confirmacion con la vela cerrada (senales que no entraron).
+    candleCheck: candleTally,
+    // Martingala en analisis (su nivel): sale al abrir la vela nueva.
+    thinking: last.thinking || 0,
     // Seguimiento: como va la senal en curso, si se avisa martingala, y lo medido de las martingalas.
     follow: last.follow || null,
     // Bot en DEMO: si esta disponible, por que no opera (si no opera) y como va su orden de esta senal.
@@ -1406,6 +1441,8 @@ async function scanTick() {
         externalResult = mine.result || null;
       }
       const advice = councilAdvice(now);
+      // Confirmacion con la vela cerrada: como esta ahora la vela que se les enseno a las IA.
+      const lastCandle = advice && council.seen ? candleChange(council.seen, usable, clockInfo, now) : null;
       last = byTime.update({
         candles: usable,
         priceY,
@@ -1447,6 +1484,7 @@ async function scanTick() {
         martinThinkMs: anyAi() && !instantMode() ? MARTIN_THINK_MS : 0,
         // La prediccion sale al abrir cada vela nueva (analisis al final de la vela en curso).
         newCandle: config.newCandle,
+        lastCandle,
         // Dos etapas: se espera la entrada del usuario y el plazo cuenta desde que entra.
         entryWaitMs: config.entryWaitSeconds * 1000,
         userEntered,
@@ -1469,7 +1507,7 @@ async function scanTick() {
       shownSignal = last.phase === 'signal' ? last.signal : null;
       // Senales vetadas que acaban de medirse en papel: a la estadistica y al registro.
       for (const v of last.vetoResults || []) {
-        addPatternOp(now, { pattern: v.pattern, dir: v.dir, result: v.result, kind: v.kind === 'patron' ? 'veto-patron' : 'veto-rebote' });
+        addPatternOp(now, { pattern: v.pattern, dir: v.dir, result: v.result, kind: v.kind === 'patron' ? 'veto-patron' : v.kind === 'vela' ? 'veto-vela' : 'veto-rebote' });
       }
       // Comparacion: la misma pulsacion, pero con la senal de las reglas dada AL INSTANTE
       // (sin esperar a la IA). No se muestra como senal; solo se mide, para saber que conviene.
@@ -1668,6 +1706,9 @@ async function scanTick() {
         if (veto && veto.kind === 'anti-rebote') {
           const d = veto.data || {};
           record(`E,${now},veto anti-rebote,${veto.dir},${veto.pattern},velas:${d.velas} cuerpos:${(d.cuerpos || []).join('/')}x despues:${d.despues} retroceso:${d.retroceso}% ${d.extremo || ''}`);
+        } else if (veto && veto.kind === 'vela') {
+          // E,ms,veto vela,lado,patron,iba:color quedo:color   (la vela que miro la IA cambio de color)
+          record(`E,${now},veto vela,${veto.dir},${veto.pattern},iba:${veto.data.was} quedo:${veto.data.now}`);
         } else if (veto) {
           record(`E,${now},veto patron,${veto.dir},${veto.pattern},${String(veto.text).replace(/[,\r\n]+/g, ' ')}`);
         }
@@ -1736,6 +1777,7 @@ async function scanTick() {
         council.votedDir = last.signal ? last.signal.dir : null;
         council.votedAnswers = votes.length ? { ...council.answers } : null;
         council.answers = {};
+        council.seen = null;
         council.requestId++;
         council.asked = false;
       }
@@ -1747,15 +1789,34 @@ async function scanTick() {
         const pauseMs = config.pauseSeconds * 1000;
         // (Con espera de entrada / bot, la senal no dura un tiempo fijo: a las IA se les pregunta al
         // empezar el analisis, no "un poco antes de que termine la senal".)
-        const endingSoon = !config.manual && !config.entryWaitSeconds && last.phase === 'signal' && last.remainingMs <= AI_LEAD_MS;
-        if (endingSoon || last.phase === 'analysis') {
+        // PREGUNTA TARDE: si se sabe cuanto falta para que salga la senal (sale al abrir la vela, o
+        // es una martingala en analisis), se pregunta cuando falta AI_ASK_BEFORE_CLOSE_MS y no antes:
+        // asi las IA ven la ultima vela casi completa.
+        const synced = Boolean(config.newCandle && clockInfo && clockInfo.known && Number.isFinite(clockInfo.remainingMs));
+        // (Con la senal al abrir la vela no se pregunta "antes de que termine la senal en curso": la
+        // siguiente saldra al abrir la otra vela, y esa consulta llegaria con mas de 10 s de ventaja.)
+        const endingSoon = !synced && !config.manual && !config.entryWaitSeconds && last.phase === 'signal' && last.remainingMs <= AI_LEAD_MS;
+        const { untilSignal, tooEarly } = askMoment({
+          phase: last.phase,
+          thinking: last.thinking || 0,
+          remainingMs: last.remainingMs,
+          clockLeftMs: synced ? clockInfo.remainingMs : null,
+          leadMs: AI_ASK_BEFORE_CLOSE_MS,
+        });
+        if ((endingSoon || last.phase === 'analysis') && !tooEarly) {
           council.asked = true;
           let windowMs = last.remainingMs;
           if (last.phase === 'signal') windowMs += pauseMs;
-          else if (config.manual && !last.thinking) windowMs += AI_MANUAL_EXTRA_MS; // (la martingala no espera de mas)
+          else if (untilSignal !== null) windowMs = untilSignal + AI_ANSWER_GRACE_MS; // el plazo llega hasta que sale la senal
+          else if (config.manual) windowMs += AI_MANUAL_EXTRA_MS;
+          // Lo que se les ensena de la vela en curso, para confirmar despues con la vela cerrada.
+          council.seen = candleSeen(usable, clockInfo, now);
           // Los niveles que reciben las IA son los mismos que estan dibujados (ver readingsForAi).
           const priceNow = priceY !== null ? -priceY : forming ? forming.close : null;
-          askCouncil(longCandles.length ? longCandles : usable, last.moves || [], last.ticks || [], windowMs, panel ? readingsForAi(panel.data, priceNow) : null);
+          const timing = last.phase === 'analysis' && untilSignal !== null ? { opensInMs: untilSignal, atCandleOpen: synced } : null;
+          askCouncil(longCandles.length ? longCandles : usable, last.moves || [], last.ticks || [], windowMs, panel ? readingsForAi(panel.data, priceNow) : null, timing);
+          // E,ms,consulta,segundo de la vela en que se pregunto,segundos que faltan para la senal
+          record(`E,${now},consulta,${clockInfo && Number.isFinite(clockInfo.elapsedMs) ? Math.round(clockInfo.elapsedMs / 100) / 10 : ''},${untilSignal !== null ? Math.round(untilSignal / 100) / 10 : ''}`);
         }
       }
       previousPhase = last.phase;

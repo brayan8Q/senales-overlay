@@ -76,13 +76,17 @@ const EXTERNAL_WAIT_MS = 2500;
 // PREDICCION AL ABRIR CADA VELA NUEVA (15 nov 2026): el analisis se hace al final de la vela en
 // curso (empieza cuando le falta lo que dura el analisis, mas este margen) y la senal sale en
 // cuanto abre la vela siguiente (dentro de sus primeros SYNC_OPEN_MS). Hace falta el reloj de la
-// vela; sin el, todo sigue como antes. La martingala no espera: sale al perder.
+// vela; sin el, todo sigue como antes. La martingala analizada tambien sale al abrir vela (abajo).
 const SYNC_LEAD_MS = 500;
 // Si a la vela le falta menos que el analisis menos esto, ya no da tiempo: se espera a la vela siguiente
 // (15 nov, en vivo: un analisis que arranco tarde saco la senal a los 3.5 s de la vela).
 const SYNC_LATE_MS = 1500;
 const SYNC_OPEN_MS = 2500;
 const SYNC_MAX_WAIT_MS = 20000; // tope de espera con el analisis ya hecho (por si el reloj falla)
+// MARTINGALA AL ABRIR VELA (15 nov 2026, tarde): la martingala analizada ya no sale a media vela
+// (salia en el segundo 6). Sale al abrir la vela siguiente a la de la perdida; si a esa vela le
+// falta menos que esto, a la que le sigue (no daria tiempo de analizar nada).
+const MARTIN_SYNC_MIN_MS = 1500;
 const MARTIN_ALERT_MS = 1500;
 const MARTIN_ALERT_PART = 0.25;
 const OPPOSITE = { up: 'down', down: 'up' };
@@ -477,6 +481,10 @@ function createTimedTracker() {
      *        plataforma (se le espera un poco antes de calificar con el precio propio).
      * @param {'win'|'loss'|'tie'|null} [input.externalResult]  Resultado que dio la plataforma de
      *        la operacion en curso: manda sobre la medicion propia.
+     * @param {{changed:boolean, was:string, now:string, closed:boolean}|null} [input.lastCandle]
+     *        Confirmacion con la vela cerrada (ver lastcandle.js): como quedo la vela que se le enseno
+     *        a la IA. Si cambio de color, lo que dijo la IA ya no vale: la senal queda en ESPERAR y
+     *        se mide en papel; la martingala la deciden las reglas.
      * @param {{known:boolean, seconds:number, elapsedMs:number|null, remainingMs:number|null,
      *          closedNow:boolean, closeRow:number|null}} [input.candle]  Reloj de la vela en curso
      *        (ver candleclock.js). closedNow = acaba de cerrar una vela; closeRow = fila del cierre
@@ -513,6 +521,7 @@ function createTimedTracker() {
       userEntered = false,
       externalAwait = false,
       externalResult = null,
+      lastCandle = null,
     }) {
       const completed = candles.slice(0, -1);
       const aligned = Boolean(align) && manual; // solo con el boton PREDECIR
@@ -721,18 +730,42 @@ function createTimedTracker() {
       //     mucho; el lado es el de las IA y, si no contestan o no eligen, el de las reglas del
       //     panel con todas sus lecturas (tendencia, vela actual, tramos, niveles, patron medido).
       //   - Sin el: como al principio, en el mismo instante y hacia donde va el precio.
-      let thinking = false; // martingala: esperando (poco) el nuevo analisis
+      //   - AL ABRIR VELA (15 nov, tarde): con `newCandle` y el reloj de la vela, la martingala
+      //     analizada tampoco sale a media vela: espera a que abra la vela siguiente (la hora se fija
+      //     al perder y el reloj la va afinando). Mientras tanto se sigue escaneando.
+      let thinking = false; // martingala: esperando el nuevo analisis (o a que abra la vela)
+      let thinkLeftMs = 0; // cuanto falta para que salga
       if (nextMartin && !pending) {
         const smart = Number.isFinite(martinThinkMs) && martinThinkMs >= 0;
+        if (smart && newCandle && nextMartin.openAt === undefined) {
+          nextMartin.openAt =
+            clockKnown && Number.isFinite(candle.remainingMs)
+              ? now + candle.remainingMs + (candle.remainingMs < MARTIN_SYNC_MIN_MS ? candle.seconds * 1000 : 0)
+              : null;
+        }
+        const synced = smart && Number.isFinite(nextMartin.openAt);
+        if (synced && clockKnown && Number.isFinite(candle.remainingMs)) {
+          const estimate = now + candle.remainingMs; // cuando abre la vela siguiente, segun el reloj de ahora
+          if (Math.abs(estimate - nextMartin.openAt) < 1000) nextMartin.openAt = estimate;
+        }
         const waited = now - nextMartin.since;
         const mark = status === 'ok' ? markNow(priceY, completed, quote) : null;
-        if (!mark) {
+        if (synced) {
+          if (now < nextMartin.openAt) thinking = true;
+          else if (!mark) {
+            // Abrio la vela pero no se puede leer en este instante: se reintenta un momento.
+            if (now < nextMartin.openAt + 1500) thinking = true;
+            else nextMartin = null;
+          }
+          if (thinking) thinkLeftMs = Math.max(0, nextMartin.openAt - now);
+        } else if (!mark) {
           // No se puede leer en este instante: con analisis se reintenta un momento; sin el, no hay martingala.
           if (smart && waited < martinThinkMs + 1500) thinking = true;
           else nextMartin = null;
         } else if (smart && !advice && waited < martinThinkMs) {
           thinking = true;
         }
+        if (thinking && !synced) thinkLeftMs = Math.max(0, martinThinkMs - waited);
       }
       if (nextMartin && !pending && !thinking) {
         const follow = nextMartin;
@@ -749,10 +782,14 @@ function createTimedTracker() {
             const live = candles[candles.length - 1];
             const shape = formingOk ? candlePattern(live, candles[candles.length - 2], completed) : { vote: 0, text: 'tapada por un aviso de la plataforma', short: 'tapada' };
             const rules = decide(trend, shape, moves, { force: true, fallback: dir, ticks: liveNow, context, regime, memory, formation: findFormation(completed) });
-            const useAi = Boolean(advice && advice.dir);
+            // Si la ultima vela cambio de color despues de que la IA la miro, su lectura ya no vale.
+            // La martingala no se cancela (es siempre): la deciden las reglas con la vela ya cerrada.
+            const stale = Boolean(advice && advice.dir && lastCandle && lastCandle.changed);
+            const useAi = Boolean(advice && advice.dir) && !stale;
             dir = useAi ? advice.dir : rules.dir || dir;
             martinConfidence = useAi ? advice.confidence || 'media' : rules.confidence || 'baja';
-            why = `. Nuevo análisis${useAi ? ' de la IA' : ''}: ${useAi ? advice.reason : rules.reason}`;
+            const note = stale ? ' (la última vela cambió de color después de que la IA la miró: deciden las reglas)' : '';
+            why = `. Nuevo análisis${useAi ? ' de la IA' : ''}${note}: ${useAi ? advice.reason : rules.reason}`;
           }
           watching = null;
           observed = false;
@@ -908,6 +945,20 @@ function createTimedTracker() {
               data: null,
             };
           }
+          // CONFIRMACION CON LA VELA CERRADA (15 nov 2026, tarde; ver lastcandle.js). A la IA se le
+          // pregunta con la ultima vela todavia en curso. Si entre esa consulta y este instante la
+          // vela cambio de color, la IA razono sobre una vela que ya no es: la senal no entra (queda
+          // en ESPERAR y se mide en papel, para comprobar si este freno ayuda o estorba).
+          if (dir && useAi && !veto && lastCandle && lastCandle.changed) {
+            const color = (d) => (d === 'up' ? 'verde' : 'roja');
+            veto = {
+              kind: 'vela',
+              dir,
+              pattern: setup.key,
+              text: `La última vela cambió de color después de que la IA la miró (iba ${color(lastCandle.was)} y ${lastCandle.closed ? 'cerró' : 'va'} ${color(lastCandle.now)}): su lectura ya no vale. La señal era ${dir === 'up' ? 'ARRIBA' : 'ABAJO'}.`,
+              data: { was: lastCandle.was, now: lastCandle.now },
+            };
+          }
           if (veto) {
             shadows.push({ kind: veto.kind, dir, pattern: setup.key, mark, time: now, dueAt: now + cycleMs });
             reason = veto.text;
@@ -951,7 +1002,7 @@ function createTimedTracker() {
               source: useAi ? 'ia' : 'reglas',
               braked, // el freno para la IA cambio o bajo esta senal
               pattern: setup, // { key, text, detail }: situacion de la grafica que disparo la senal
-              veto, // null, o { kind: 'anti-rebote'|'patron', dir, pattern, text, data }: la senal quedo en ESPERAR
+              veto, // null, o { kind: 'anti-rebote'|'patron'|'vela', dir, pattern, text, data }: la senal quedo en ESPERAR
               untilClose,
             },
           };
@@ -974,8 +1025,8 @@ function createTimedTracker() {
         else if (pending.untilClose) remainingMs = pending.dueAt || !clockKnown ? 0 : candle.remainingMs; // hasta el cierre de la vela
         else remainingMs = Math.max(0, pending.spanMs + pending.entryMs - (now - pending.time));
       } else if (thinking) {
-        phase = 'analysis'; // la martingala se esta analizando
-        remainingMs = Math.max(0, martinThinkMs - (now - nextMartin.since));
+        phase = 'analysis'; // la martingala se esta analizando (o espera a que abra la vela)
+        remainingMs = thinkLeftMs;
       } else if (watching) {
         phase = 'analysis';
         remainingMs = Math.max(0, pauseMs - (now - watching.time));
@@ -1073,4 +1124,4 @@ function createTimedTracker() {
   };
 }
 
-module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum, EARLY_CANDLE_MS, PRICE_LOST_MS, NO_SIGNAL_MS, AI_STREAK_BRAKE, ENTRY_SEEN_LAG_MS, EXTERNAL_WAIT_MS, SYNC_LEAD_MS, SYNC_LATE_MS, SYNC_OPEN_MS };
+module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum, EARLY_CANDLE_MS, PRICE_LOST_MS, NO_SIGNAL_MS, AI_STREAK_BRAKE, ENTRY_SEEN_LAG_MS, EXTERNAL_WAIT_MS, SYNC_LEAD_MS, SYNC_LATE_MS, SYNC_OPEN_MS, MARTIN_SYNC_MIN_MS };

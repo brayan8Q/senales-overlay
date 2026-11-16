@@ -162,6 +162,25 @@ Tres cambios. Ninguno manda órdenes ni toca una cuenta: el panel sigue siendo s
 - Arriba del panel: «Bot DEMO · saldo…», «entró con $1.00 · paga 52 %», o por qué está en pausa.
 - En ⚙, «Que el bot abra las operaciones (DEMO)». Registro: líneas `O` (enviada, abierta, resultado, fallo, bot).
 
+### 7. La última vela: pregunta tarde, confirmación y martingala al abrir vela (`src/lastcandle.js`)
+
+La señal sale al abrir cada vela nueva (ajuste «La predicción sale al abrir cada vela»). Medido el 15 de
+noviembre en 37 señales: a la IA se le preguntaba en el segundo 10 de 15, así que no veía el último tercio de
+la vela. En 19, un tercio o más del tamaño de la vela se hizo después de la consulta; 9 cambiaron de color
+(esas acertaron 50 %; las otras 28, 70 %). Son pocas: por eso todo queda medido.
+
+- **Pregunta tarde.** A las IA se les pregunta cuando a la vela le faltan 3 s (segundo 12 de 15) y se les
+  dice que la operación se abre al abrir la vela siguiente. Tienen hasta ese momento para contestar; si no
+  llegan, deciden las reglas del panel. Registro: `E,ms,consulta,segundo de la vela,segundos que faltan`.
+- **Confirmación con la vela cerrada.** Si la vela que vio la IA cambió de color antes de cerrar, esa señal
+  no entra: queda en ESPERAR («la vela cambió de color») y se mide en papel (`P,…,veto-vela`,
+  `E,ms,veto vela,lado,patrón,iba:… quedo:…`). En el detalle: «Vela que cambió de color: frenó N · habrían
+  ganado X, perdido Y». Si las que habrían ganado son más, el freno estorba. No cuenta para los patrones.
+- **Martingala al abrir vela.** La martingala analizada ya no sale a media vela: se sigue escaneando, se le
+  pregunta a la IA en el segundo 12 y entra al abrir la vela siguiente (si la señal perdió con menos de 1.5 s
+  de vela, en la que le sigue). Si la vela cambió de color después de la consulta, la martingala no se
+  cancela: la deciden las reglas. Sin el reloj de la vela, todo sigue como antes.
+
 ### Validación con el registro real (`node tools/validar-historico.js`)
 
 Rearma las velas de 15 s con el precio registrado y aplica las mismas funciones del panel a las señales ya

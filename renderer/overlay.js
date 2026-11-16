@@ -455,6 +455,12 @@ function renderProgress(s) {
     $('progress-text').textContent = s.clockKnown
       ? `Esperando la siguiente vela · abre en ${Math.ceil(s.remainingMs / 1000)} s`
       : 'Esperando la siguiente vela…';
+  } else if (s.phase === 'analysis' && s.thinking) {
+    // Martingala en análisis: sale al abrir la vela nueva (cuenta regresiva hasta ahí).
+    const total = Math.max(1, (s.candleSeconds || s.pauseSeconds) * 1000);
+    bar.className = 'analysis';
+    $('progress-fill').style.width = `${Math.round(Math.min(1, Math.max(0, 1 - s.remainingMs / total)) * 100)}%`;
+    $('progress-text').textContent = `Martingala ${s.thinking} · analizando · entra en ${Math.ceil(s.remainingMs / 1000)} s`;
   } else if (s.phase === 'analysis') {
     // Avanza por las 8 lecturas, como "analizando · 6 de 8".
     const steps = ['tendencia', 'EMA', 'momentum', 'RSI', 'mov. 1 min', 'nivel', 'sesión', 'resumen'];
@@ -535,8 +541,12 @@ api.onState((s) => {
     $('signal-source').textContent = '';
   } else if (analyzing) {
     $('signal').className = 'analysis';
-    $('signal-label').textContent = 'ANALIZANDO';
-    $('signal-detail').textContent = s.ai.enabled ? 'Leyendo las velas y consultando a la IA.' : 'Leyendo las velas y el movimiento del precio.';
+    $('signal-label').textContent = s.thinking ? `MARTINGALA ${s.thinking}` : 'ANALIZANDO';
+    if (s.thinking) {
+      $('signal-detail').textContent = `La señal perdió. Sigo escaneando y analizo la martingala ${s.thinking}${s.newCandle && s.clockKnown ? `: entra al abrir la vela nueva (en ${Math.ceil(s.remainingMs / 1000)} s)` : ''}.`;
+    } else {
+      $('signal-detail').textContent = s.ai.enabled ? 'Leyendo las velas y consultando a la IA.' : 'Leyendo las velas y el movimiento del precio.';
+    }
     $('signal-source').textContent = '';
   } else {
     // Una señal de confianza baja se ve rayada: el panel eligió un lado sin lectura clara.
@@ -551,7 +561,7 @@ api.onState((s) => {
     if (source && dir && s.signal.confidence) source += ` · ${s.signal.confidence}`;
     if (martin) source = `martingala ${s.signal.martin}${s.martinLevels > 1 ? ` de ${s.martinLevels}` : ''}`;
     // Señal vetada: se dice qué veto fue y hacia dónde iba.
-    if (s.veto) source = `${s.veto.kind === 'patron' ? 'patrón desactivado' : 'veto anti-rebote'} · iba ${s.veto.dir === 'up' ? 'ARRIBA' : 'ABAJO'}`;
+    if (s.veto) source = `${s.veto.kind === 'patron' ? 'patrón desactivado' : s.veto.kind === 'vela' ? 'la vela cambió de color' : 'veto anti-rebote'} · iba ${s.veto.dir === 'up' ? 'ARRIBA' : 'ABAJO'}`;
     $('signal-source').textContent = source;
   }
   // Porcentaje de la señal en curso: el acierto MEDIDO de su patrón (últimas 100 operaciones de ese
@@ -560,7 +570,7 @@ api.onState((s) => {
   // medido en 164 operaciones, no separaba las ganadoras de las perdedoras.
   const showing = !waiting && !resting && !analyzing;
   // "MARTIN SUBE ▲" lleva la letra un poco menor para caber en una línea.
-  $('signal-label').classList.toggle('martin', showing && Boolean(s.signal && s.signal.source === 'martingala'));
+  $('signal-label').classList.toggle('martin', (showing && Boolean(s.signal && s.signal.source === 'martingala')) || (analyzing && Boolean(s.thinking)));
   const pat = showing ? s.pattern : null;
   const pct = $('signal-pct');
   const note = $('signal-pct-note');
@@ -707,6 +717,10 @@ api.onState((s) => {
   const blocked = rb.wins + rb.losses + rb.ties;
   $('rebound-line').classList.toggle('hidden', blocked === 0);
   if (blocked) $('rebound-line').textContent = `Anti-rebote: bloqueó ${blocked} · habrían ganado ${rb.wins}, perdido ${rb.losses}`;
+  const cc = s.candleCheck || { wins: 0, losses: 0, ties: 0 };
+  const held = cc.wins + cc.losses + cc.ties;
+  $('candle-line').classList.toggle('hidden', held === 0);
+  if (held) $('candle-line').textContent = `Vela que cambió de color: frenó ${held} · habrían ganado ${cc.wins}, perdido ${cc.losses}`;
 
   // --- Aviso si algo impide leer la gráfica ---
   const problem = !/^Leyendo /.test(s.status);

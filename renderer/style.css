@@ -386,7 +386,7 @@ html, body {
 #pattern-table { margin-top: 5px; font-size: 9.5px; line-height: 1.35; color: #cbd5e1; }
 #pattern-table .good { color: #86efac; }
 #pattern-table .off { color: #fca5a5; }
-#rebound-line { margin-top: 3px; font-size: 9.5px; color: #8b93a3; }
+#rebound-line, #candle-line { margin-top: 3px; font-size: 9.5px; color: #8b93a3; }
 
 /* ---------- 15 nov 2026: seguimiento de la señal y aviso de martingala ---------- */
 #signal-follow { margin-top: 5px; padding: 3px 5px; border-radius: 7px; font-size: 10px; font-weight: 800; line-height: 1.2; background: rgba(0, 0, 0, .28); }
