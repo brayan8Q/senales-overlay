@@ -460,7 +460,7 @@ function renderProgress(s) {
     const total = Math.max(1, (s.candleSeconds || s.pauseSeconds) * 1000);
     bar.className = 'analysis';
     $('progress-fill').style.width = `${Math.round(Math.min(1, Math.max(0, 1 - s.remainingMs / total)) * 100)}%`;
-    $('progress-text').textContent = `Martingala ${s.thinking} · analizando · entra en ${Math.ceil(s.remainingMs / 1000)} s`;
+    $('progress-text').textContent = `Martingala ${s.thinking} · entra al abrir la vela · ${Math.ceil(s.remainingMs / 1000)} s`;
   } else if (s.phase === 'analysis') {
     // Avanza por las 8 lecturas, como "analizando · 6 de 8".
     const steps = ['tendencia', 'EMA', 'momentum', 'RSI', 'mov. 1 min', 'nivel', 'sesión', 'resumen'];
@@ -541,9 +541,16 @@ api.onState((s) => {
     $('signal-source').textContent = '';
   } else if (analyzing) {
     $('signal').className = 'analysis';
-    $('signal-label').textContent = s.thinking ? `MARTINGALA ${s.thinking}` : 'ANALIZANDO';
+    // Con la señal al abrir la vela, a media vela NO hay predicción: solo se espera la vela nueva
+    // (el análisis corre por dentro). Así no parece que se predice a media vela.
+    const atOpen = s.newCandle && s.clockKnown;
+    $('signal-label').textContent = atOpen ? 'ESPERANDO LA VELA NUEVA' : s.thinking ? `MARTINGALA ${s.thinking}` : 'ANALIZANDO';
     if (s.thinking) {
-      $('signal-detail').textContent = `La señal perdió. Sigo escaneando y analizo la martingala ${s.thinking}${s.newCandle && s.clockKnown ? `: entra al abrir la vela nueva (en ${Math.ceil(s.remainingMs / 1000)} s)` : ''}.`;
+      $('signal-detail').textContent = atOpen
+        ? `La señal perdió. La martingala ${s.thinking} entra al abrir la vela nueva (en ${Math.ceil(s.remainingMs / 1000)} s). Sigo escaneando.`
+        : `La señal perdió. Sigo escaneando y analizo la martingala ${s.thinking}.`;
+    } else if (atOpen) {
+      $('signal-detail').textContent = 'Revisando la vela en curso. La predicción sale al abrir la vela nueva.';
     } else {
       $('signal-detail').textContent = s.ai.enabled ? 'Leyendo las velas y consultando a la IA.' : 'Leyendo las velas y el movimiento del precio.';
     }
@@ -570,7 +577,7 @@ api.onState((s) => {
   // medido en 164 operaciones, no separaba las ganadoras de las perdedoras.
   const showing = !waiting && !resting && !analyzing;
   // "MARTIN SUBE ▲" lleva la letra un poco menor para caber en una línea.
-  $('signal-label').classList.toggle('martin', (showing && Boolean(s.signal && s.signal.source === 'martingala')) || (analyzing && Boolean(s.thinking)));
+  $('signal-label').classList.toggle('martin', (showing && Boolean(s.signal && s.signal.source === 'martingala')) || analyzing);
   const pat = showing ? s.pattern : null;
   const pct = $('signal-pct');
   const note = $('signal-pct-note');
