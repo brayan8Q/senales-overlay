@@ -343,3 +343,86 @@ test('dos segundos antes: la martingala también sale 1 s dentro de la vela nuev
   s = read(31000, 110);
   assert.equal(s.signal.source, 'martingala');
 });
+
+// ---------- Al iniciar la vela: la predicción arranca cuando abre, no antes ----------
+const openStart = (extra = {}) => {
+  const t = createTimedTracker();
+  const read = (now, price = 112, more = {}) =>
+    t.update({ candles: UP, priceY: row(price), now, cycleMs: 3000, pauseMs: 5000, payout: 92, manual: false, newCandle: true, waitClock: true, openStartMs: 1500, thinkMinMs: 1000, thinkMaxMs: 5000, candle: clock(now), ...extra, ...more });
+  return { t, read };
+};
+
+test('al iniciar la vela: no se analiza antes de que abra; arranca al abrir y la señal sale cuando contesta la IA', () => {
+  const { read } = openStart();
+  let s = read(9500);
+  assert.equal(s.phase, 'waiting'); // a media vela no arranca nada
+  s = read(13000);
+  assert.equal(s.phase, 'waiting'); // tampoco 2 s antes del cierre
+  s = read(14900);
+  assert.equal(s.phase, 'waiting');
+  s = read(15200); // abrió la vela: arranca el análisis (la consulta a la IA sale aquí)
+  assert.equal(s.phase, 'analysis');
+  assert.equal(s.remainingMs, 5000);
+  s = read(15900, 112, { advice: IA_UP }); // contestó muy rápido: aún no (se mira la vela al menos 1 s)
+  assert.equal(s.phase, 'analysis');
+  s = read(16300, 112, { advice: IA_UP });
+  assert.equal(s.phase, 'signal'); // 1.3 s dentro de la vela
+  assert.equal(s.signal.source, 'ia');
+  assert.equal(s.signal.dir, 'up');
+  // La operación (3 s) termina dentro de la misma vela; la siguiente predicción arranca al abrir la otra.
+  s = read(19300, 114);
+  assert.equal(s.lastResult, 'acertó');
+  assert.equal(s.phase, 'waiting');
+  s = read(29000);
+  assert.equal(s.phase, 'waiting');
+  s = read(30100);
+  assert.equal(s.phase, 'analysis');
+});
+
+test('al iniciar la vela: si la IA tarda, se le espera hasta 5 s; si no llega, deciden las reglas', () => {
+  const { read } = openStart();
+  read(15100);
+  let s = read(18000);
+  assert.equal(s.phase, 'analysis');
+  s = read(19000, 112, { advice: IA_DOWN }); // contestó a los 3.9 s
+  assert.equal(s.phase, 'signal');
+  assert.equal(s.signal.dir, 'down');
+
+  const other = openStart();
+  other.read(15100);
+  s = other.read(20000);
+  assert.equal(s.phase, 'analysis');
+  s = other.read(20100); // 5 s sin respuesta
+  assert.equal(s.phase, 'signal');
+  assert.equal(s.signal.source, 'reglas');
+});
+
+test('al iniciar la vela: si el panel llega con la vela ya avanzada, espera a que abra la siguiente', () => {
+  const { read } = openStart();
+  let s = read(17000); // la vela lleva 2 s: ya no es «al iniciar»
+  assert.equal(s.phase, 'waiting');
+  s = read(30400);
+  assert.equal(s.phase, 'analysis');
+});
+
+test('al iniciar la vela: la martingala se analiza al abrir la vela siguiente y sale cuando contesta la IA', () => {
+  const { read } = openStart({ martin: 2, martinThinkMs: 2500 });
+  read(15100);
+  let s = read(16200, 112, { advice: IA_UP });
+  assert.equal(s.phase, 'signal');
+  s = read(19200, 110); // perdió
+  assert.equal(s.lastResult, 'falló');
+  assert.equal(s.thinking, 1);
+  assert.equal(s.signal, null);
+  s = read(29900, 110); // todavía no abre la vela
+  assert.equal(s.thinking, 1);
+  s = read(30100, 110); // abrió: se consulta a la IA (quedan 5 s de tope)
+  assert.equal(s.thinking, 1);
+  assert.ok(s.remainingMs <= 5000 && s.remainingMs > 4800);
+  s = read(30600, 110, { advice: IA_DOWN }); // contestó, pero aún no se vio 1 s de vela
+  assert.equal(s.thinking, 1);
+  s = read(31100, 110, { advice: IA_DOWN });
+  assert.equal(s.signal.source, 'martingala');
+  assert.equal(s.signal.dir, 'down');
+  assert.equal(s.signal.reason, 'Martingala 1: la señal ARRIBA perdió. Nuevo análisis de la IA: IA: giro bajista');
+});

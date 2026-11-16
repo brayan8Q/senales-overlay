@@ -317,60 +317,50 @@ test('arranque: fuente interna activa y la IA guardada se activa sola', async ()
   assert.equal(s.newCandle, true);
 });
 
-test('a la IA se le pregunta en el segundo 12; la señal sale al abrir la vela; se confirma con la vela cerrada', async () => {
-  ai.asked.length = 0; // (lo que se haya preguntado durante el arranque no cuenta)
-  ai.pending = null;
-  const seen = { shown: 0, flipped: 0, braked: 0, martin: 0, martinAsks: 0 };
+test('a la IA se le pregunta al INICIAR cada vela; la señal sale cuando contesta, dentro de esa vela; la martingala igual', async () => {
+  // (Lo que se haya preguntado durante el arranque no cuenta; si quedó una consulta en camino, se contesta.)
+  if (ai.pending) {
+    const answer = ai.pending;
+    ai.pending = null;
+    answer();
+    await settle();
+  }
+  ai.asked.length = 0;
+  const seen = { shown: 0, martin: 0, martinAsks: 0 };
   let previous = 'idle';
   let previousSignal = null;
   let askedBefore = 0;
-  let pendingAsk = null; // la consulta que corresponde a la próxima señal
+  let pendingAsk = null;
   for (let i = 0; i < 40 * (CANDLE_MS / READ_MS); i++) {
     const { s } = await step();
-    // --- Cada consulta nueva: en el segundo 12 de la vela, con el aviso de cuándo se abre la operación ---
     if (ai.asked.length > askedBefore) {
       assert.equal(ai.asked.length, askedBefore + 1, 'una consulta por predicción');
       askedBefore = ai.asked.length;
       pendingAsk = ai.asked[ai.asked.length - 1];
-      assert.ok(pendingAsk.elapsed >= 13000 && pendingAsk.elapsed < 13000 + READ_MS, `se preguntó en el segundo ${pendingAsk.elapsed / 1000} de la vela`);
-      const when = pendingAsk.snapshot.cuando_se_abre_la_operacion;
-      assert.ok(when && when.en_segundos > 2.6 && when.en_segundos <= 6, `cuando_se_abre_la_operacion: ${JSON.stringify(when)}`);
-      assert.match(when.explicacion, /se abre cuando CIERRE la vela en curso y abra la siguiente/);
-      assert.equal(pendingAsk.snapshot.tu_respuesta_tarda, undefined);
-      // El plazo es un entero: la conexión real rechaza uno con decimales (pasó en vivo el 15 nov).
+      // La consulta sale con la vela recién abierta (nunca a media vela ni antes del cierre).
+      assert.ok(pendingAsk.elapsed <= 1500 + READ_MS, `se preguntó a los ${pendingAsk.elapsed} ms de abrir la vela`);
       assert.ok(Number.isInteger(pendingAsk.timeoutMs), `plazo ${pendingAsk.timeoutMs}`);
-      // (El reloj de la vela va en la consulta cuando la memoria del mercado ya sabe cuánto dura una vela.)
-      // El plazo para contestar llega hasta que abre la vela.
-      assert.ok(Math.abs(pendingAsk.timeoutMs - when.en_segundos * 1000) < 60, `plazo ${pendingAsk.timeoutMs} ms`);
+      assert.ok(pendingAsk.timeoutMs > 3500 && pendingAsk.timeoutMs <= 5000, `plazo ${pendingAsk.timeoutMs}`);
+      assert.match(pendingAsk.snapshot.vela_recien_abierta, /ACABA DE ABRIR/);
+      assert.equal(pendingAsk.snapshot.cuando_se_abre_la_operacion, undefined);
       if (s.thinking) seen.martinAsks++;
     }
-    // --- Cada señal nueva ---
     const started = s.phase === 'signal' && s.signal && (previous !== 'signal' || s.signal !== previousSignal);
     if (started) {
       const elapsed = nowMs - market.startedAt;
-      assert.ok(elapsed >= 1000 && elapsed <= 1000 + 2 * READ_MS, `la señal salió a los ${elapsed} ms de abrir la vela`);
-      const closed = market.closed[market.closed.length - 1];
-      const flipped = pendingAsk && pendingAsk.color !== 'flat' && colorOf(closed) !== 'flat' && colorOf(closed) !== pendingAsk.color;
+      // Sale dentro de la vela en que se preguntó: como pronto 1 s después de arrancar el análisis.
+      assert.ok(elapsed >= 1000 && elapsed <= 5000 + 1500 + READ_MS, `la señal salió a los ${elapsed} ms de abrir la vela`);
       if (s.signal.source === 'martingala') {
         seen.martin++;
         assert.ok(s.signal.dir, 'la martingala siempre entra');
-        if (flipped) assert.match(s.signal.reason, /la última vela cambió de color después de que la IA la miró: deciden las reglas/);
-        else if (pendingAsk) assert.match(s.signal.reason, /Nuevo análisis de la IA: IA: vela en curso/);
-      } else if (s.signal.veto && s.signal.veto.kind === 'vela') {
-        seen.flipped++;
-        assert.ok(flipped, 'el veto solo sale si la vela cambió de color');
-        assert.equal(s.signal.dir, null);
-        assert.equal(s.veto.kind, 'vela');
-        assert.match(s.signal.reason, /^La última vela cambió de color después de que la IA la miró \(iba (verde|roja) y cerró (verde|roja)\)/);
+        assert.match(s.signal.reason, /Nuevo análisis de la IA: IA: vela en curso/);
       } else if (s.signal.dir) {
         seen.shown++;
         assert.equal(s.signal.source, 'ia');
-        assert.ok(!flipped, 'una señal de la IA no entra si su vela cambió de color');
-        assert.equal(s.signal.dir, pendingAsk.color === 'down' ? 'down' : 'up');
-      } else if (s.signal.braked) seen.braked++;
+        assert.equal(s.signal.veto, null);
+      }
       pendingAsk = null;
     }
-    // --- Mientras se analiza una martingala: nada a media vela ---
     if (s.thinking) {
       assert.equal(s.phase, 'analysis');
       assert.equal(s.signal, null);
@@ -379,17 +369,10 @@ test('a la IA se le pregunta en el segundo 12; la señal sale al abrir la vela; 
     previousSignal = s.phase === 'signal' ? s.signal : null;
   }
   assert.ok(seen.shown >= 5, `señales de la IA que entraron: ${seen.shown}`);
-  assert.ok(seen.flipped >= 1, `señales frenadas porque la vela cambió de color: ${seen.flipped}`);
   assert.ok(seen.martin >= 1, `martingalas: ${seen.martin}`);
-  assert.equal(seen.martinAsks, seen.martin, 'cada martingala tuvo su consulta, también en el segundo 12');
+  assert.equal(seen.martinAsks, seen.martin, 'cada martingala tuvo su consulta, al abrir su vela');
   const log = records();
-  assert.match(log, /\nE,\d+,consulta,[\d.]+,[\d.]+\n/);
-  assert.match(log, /\nE,\d+,veto vela,(up|down),\w+,iba:(up|down) quedo:(up|down)\n/);
-  assert.match(log, /\nS,\d+,wait,ia,ninguna,3,[^,]*,,\w+,vela\n/);
-  assert.match(log, /\nP,\d+,\w+,(up|down),(win|loss|tie),\d+,\w+,3,veto-vela\n/);
+  assert.match(log, /\nE,\d+,consulta,[\d.]+,[\d.]*\n/);
+  assert.doesNotMatch(log, /veto vela/);
   assert.match(log, /\nP,\d+,\w+,(up|down),(win|loss|tie),\d+,\w+,3,martin1\n/);
-  // Lo frenado por la vela se cuenta aparte (no entra en la estadística por patrón).
-  const { s } = await step();
-  const held = s.candleCheck.wins + s.candleCheck.losses + s.candleCheck.ties;
-  assert.ok(held >= 1 && held <= seen.flipped);
 });

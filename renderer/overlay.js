@@ -460,7 +460,7 @@ function renderProgress(s) {
     const total = Math.max(1, (s.candleSeconds || s.pauseSeconds) * 1000);
     bar.className = 'analysis';
     $('progress-fill').style.width = `${Math.round(Math.min(1, Math.max(0, 1 - s.remainingMs / total)) * 100)}%`;
-    $('progress-text').textContent = `Martingala ${s.thinking} · entra al abrir la vela · ${Math.ceil(s.remainingMs / 1000)} s`;
+    $('progress-text').textContent = `Martingala ${s.thinking} · se analiza al iniciar la vela`;
   } else if (s.phase === 'analysis') {
     // Avanza por las 8 lecturas, como "analizando · 6 de 8".
     const steps = ['tendencia', 'EMA', 'momentum', 'RSI', 'mov. 1 min', 'nivel', 'sesión', 'resumen'];
@@ -546,13 +546,13 @@ api.onState((s) => {
     // Con la señal al abrir la vela, a media vela NO hay predicción: solo se espera la vela nueva
     // (el análisis corre por dentro). Así no parece que se predice a media vela.
     const atOpen = s.newCandle && s.clockKnown;
-    $('signal-label').textContent = atOpen ? (s.thinking ? `MARTINGALA ${s.thinking} AL ABRIR` : 'PREPARANDO LA PREDICCIÓN') : s.thinking ? `MARTINGALA ${s.thinking}` : 'ANALIZANDO';
+    $('signal-label').textContent = atOpen ? (s.thinking ? `MARTINGALA ${s.thinking}` : 'ANALIZANDO ESTA VELA') : s.thinking ? `MARTINGALA ${s.thinking}` : 'ANALIZANDO';
     if (s.thinking) {
       $('signal-detail').textContent = atOpen
-        ? `La señal perdió. La martingala ${s.thinking} entra al abrir la vela nueva (en ${Math.ceil(s.remainingMs / 1000)} s). Sigo escaneando.`
+        ? `La señal perdió. La martingala ${s.thinking} se analiza al iniciar la vela nueva y entra en cuanto la IA decide. Sigo escaneando.`
         : `La señal perdió. Sigo escaneando y analizo la martingala ${s.thinking}.`;
     } else if (atOpen) {
-      $('signal-detail').textContent = 'Revisando cómo cierra esta vela. La predicción sale al abrir la siguiente.';
+      $('signal-detail').textContent = 'La vela acaba de abrir: la IA mira cómo cerró la anterior y cómo arranca esta. En cuanto decide, entra.';
     } else {
       $('signal-detail').textContent = s.ai.enabled ? 'Leyendo las velas y consultando a la IA.' : 'Leyendo las velas y el movimiento del precio.';
     }

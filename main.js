@@ -283,6 +283,12 @@ const OPEN_LEAD_MS = 150;
 // la senal (la IA contesta en 1.1 a 2.1 s: llega antes de ese momento).
 const SYNC_BEFORE_MS = 2000;
 const SYNC_AFTER_MS = 1000;
+// AL INICIAR LA VELA (15 nov 2026, 21:00, orden del usuario; sustituye a lo de arriba): «la prediccion
+// arranca cada vez que inicia una vela, no antes… si tarda 5 segundos esta bien». La consulta a la IA
+// sale al abrir la vela (dentro de sus primeros 1.5 s); la senal, en cuanto contesta (minimo 1 s, tope 5 s).
+const OPEN_START_MS = 1500;
+const THINK_MIN_MS = 1000;
+const THINK_MAX_MS = 5000;
 let skipReason = ''; // por que la vela en curso quedo sin entrada (la ultima senal no dio lado)
 let levelMemo = null; // precio real del soporte y la resistencia dibujados (para que no brinquen)
 let internalSeenAt = 0; // ultima vez que la fuente interna cuadro con la grafica de la pantalla
@@ -719,7 +725,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15s el haz del escaner pasa siempre (tambien mientras se espera la vela) · 2026-11-15r el analisis y la IA arrancan 2 s antes de cerrar la vela, siguen 1 s en la vela nueva y ahi sale la senal · 2026-11-15q letrero a la par de la vela (dice por que no entro en esta y cuando sale la proxima) · 2026-11-15p pago real del bot · la orden sale 150 ms antes de abrir la vela (entrada pegada a la apertura) · soporte y resistencia firmes · 2026-11-15o sin el reloj exacto de la vela no se predice (ni senal ni martingala a media vela) · 2026-11-15n la IA vuelve a contestar en las senales normales (plazo entero) y se le pregunta en el segundo 11.5 · 2026-11-15m la fuente interna (y con ella el reloj de la vela) ya no se suelta al abrir una operacion: solo tras 12 s sin cuadrar · 2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15t la prediccion con IA arranca al INICIAR cada vela (no antes) y sale en cuanto contesta, dentro de esa vela · 2026-11-15s el haz del escaner pasa siempre (tambien mientras se espera la vela) · 2026-11-15r el analisis y la IA arrancan 2 s antes de cerrar la vela, siguen 1 s en la vela nueva y ahi sale la senal · 2026-11-15q letrero a la par de la vela (dice por que no entro en esta y cuando sale la proxima) · 2026-11-15p pago real del bot · la orden sale 150 ms antes de abrir la vela (entrada pegada a la apertura) · soporte y resistencia firmes · 2026-11-15o sin el reloj exacto de la vela no se predice (ni senal ni martingala a media vela) · 2026-11-15n la IA vuelve a contestar en las senales normales (plazo entero) y se le pregunta en el segundo 11.5 · 2026-11-15m la fuente interna (y con ella el reloj de la vela) ya no se suelta al abrir una operacion: solo tras 12 s sin cuadrar · 2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -1043,6 +1049,13 @@ function askCouncil(candles, moves, ticks, windowMs, readings = null, timing = n
     snapshot.objetivo =
       'la operacion vale hasta el CIERRE de la vela en curso (le faltan los segundos indicados en "segundos_a_predecir"): ' +
       'di si la vela cerrara por encima (up) o por debajo (down) del precio del momento de tu respuesta';
+  }
+  // Al iniciar la vela: se les dice que la vela en curso acaba de abrir y cual es la que hay que leer.
+  if (clockInfo && clockInfo.known && Number.isFinite(clockInfo.elapsedMs) && clockInfo.elapsedMs < 3000) {
+    snapshot.vela_recien_abierta =
+      'la vela en curso (la ultima de la lista) ACABA DE ABRIR: casi no tiene cuerpo todavia. La ultima vela completa es la anterior a ella: ' +
+      'analiza como CERRO esa (cuerpo, mechas, donde quedo el cierre) junto con la tendencia y las lecturas, y como esta arrancando la nueva. ' +
+      'La operacion se abre en cuanto respondes y dura los segundos indicados, dentro de esta misma vela';
   }
   // PREGUNTA TARDE: se les dice cuando se abrira de verdad la operacion (no cuando contesten).
   if (timing) {
@@ -1506,7 +1519,8 @@ async function scanTick() {
       }
       const advice = councilAdvice(now);
       // Confirmacion con la vela cerrada: como esta ahora la vela que se les enseno a las IA.
-      const lastCandle = advice && council.seen ? candleChange(council.seen, usable, clockInfo, now) : null;
+      // (Al iniciar la vela, la IA ya ve la vela anterior CERRADA: no hay nada que confirmar despues.)
+      const lastCandle = OPEN_START_MS > 0 ? null : advice && council.seen ? candleChange(council.seen, usable, clockInfo, now) : null;
       last = byTime.update({
         candles: usable,
         priceY,
@@ -1538,8 +1552,11 @@ async function scanTick() {
         // el exacto (el de la fuente interna): con el de pixeles, o sin reloj, no se predice.
         waitClock: Boolean(config.newCandle && config.internalSource),
         openLeadMs: 0, // (la senal ya no sale al abrir sino 1 s despues: no hay nada que adelantar)
-        syncBeforeMs: SYNC_BEFORE_MS,
-        syncAfterMs: SYNC_AFTER_MS,
+        syncBeforeMs: 0,
+        syncAfterMs: 0,
+        openStartMs: OPEN_START_MS,
+        thinkMinMs: THINK_MIN_MS,
+        thinkMaxMs: anyAi() && !instantMode() ? THINK_MAX_MS : THINK_MIN_MS, // sin IA no hay a quien esperar
         candle: {
           ...clockInfo,
           known: Boolean(clockInfo && clockInfo.known && (inner || !(config.newCandle && config.internalSource))),
@@ -1873,8 +1890,10 @@ async function scanTick() {
           thinking: last.thinking || 0,
           remainingMs: last.remainingMs,
           // Lo que falta para que salga la senal: el cierre de la vela mas el tramo de la vela nueva.
-          clockLeftMs: synced ? clockInfo.remainingMs + SYNC_AFTER_MS : null,
-          leadMs: SYNC_BEFORE_MS + SYNC_AFTER_MS,
+          // Al iniciar la vela: el analisis normal pregunta en cuanto arranca (al abrir la vela); la
+          // martingala, cuando le quedan THINK_MAX_MS, que es justo al abrir la vela siguiente.
+          clockLeftMs: null,
+          leadMs: THINK_MAX_MS,
         });
         if ((endingSoon || last.phase === 'analysis') && !tooEarly) {
           council.asked = true;
@@ -1886,7 +1905,7 @@ async function scanTick() {
           council.seen = candleSeen(usable, clockInfo, now);
           // Los niveles que reciben las IA son los mismos que estan dibujados (ver readingsForAi).
           const priceNow = priceY !== null ? -priceY : forming ? forming.close : null;
-          const timing = last.phase === 'analysis' && untilSignal !== null ? { opensInMs: untilSignal, atCandleOpen: synced } : null;
+          const timing = null; // (la operacion se abre cuando contestan: vale «tu_respuesta_tarda»)
           askCouncil(longCandles.length ? longCandles : usable, last.moves || [], last.ticks || [], windowMs, panel ? readingsForAi(panel.data, priceNow) : null, timing);
           // E,ms,consulta,segundo de la vela en que se pregunto,segundos que faltan para la senal
           record(`E,${now},consulta,${clockInfo && Number.isFinite(clockInfo.elapsedMs) ? Math.round(clockInfo.elapsedMs / 100) / 10 : ''},${untilSignal !== null ? Math.round(untilSignal / 100) / 10 : ''}`);
