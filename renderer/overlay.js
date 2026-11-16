@@ -540,11 +540,11 @@ api.onState((s) => {
       : 'Pulsa PREDECIR para pedir una señal.';
     $('signal-source').textContent = '';
   } else if (analyzing) {
-    $('signal').className = 'analysis';
+    $('signal').className = s.newCandle && s.clockKnown ? 'waiting' : 'analysis';
     // Con la señal al abrir la vela, a media vela NO hay predicción: solo se espera la vela nueva
     // (el análisis corre por dentro). Así no parece que se predice a media vela.
     const atOpen = s.newCandle && s.clockKnown;
-    $('signal-label').textContent = atOpen ? 'ESPERANDO LA VELA NUEVA' : s.thinking ? `MARTINGALA ${s.thinking}` : 'ANALIZANDO';
+    $('signal-label').textContent = atOpen ? 'ESPERANDO LA SIGUIENTE VELA' : s.thinking ? `MARTINGALA ${s.thinking}` : 'ANALIZANDO';
     if (s.thinking) {
       $('signal-detail').textContent = atOpen
         ? `La señal perdió. La martingala ${s.thinking} entra al abrir la vela nueva (en ${Math.ceil(s.remainingMs / 1000)} s). Sigo escaneando.`
@@ -577,7 +577,7 @@ api.onState((s) => {
   // medido en 164 operaciones, no separaba las ganadoras de las perdedoras.
   const showing = !waiting && !resting && !analyzing;
   // "MARTIN SUBE ▲" lleva la letra un poco menor para caber en una línea.
-  $('signal-label').classList.toggle('martin', (showing && Boolean(s.signal && s.signal.source === 'martingala')) || analyzing);
+  $('signal-label').classList.toggle('martin', (showing && Boolean(s.signal && s.signal.source === 'martingala')) || (analyzing && !(s.newCandle && s.clockKnown)));
   const pat = showing ? s.pattern : null;
   const pct = $('signal-pct');
   const note = $('signal-pct-note');
