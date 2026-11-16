@@ -1135,6 +1135,8 @@ function loadConfig() {
     if (Number.isFinite(saved.entryWaitSeconds)) config.entryWaitSeconds = Math.max(0, Math.min(30, Math.round(saved.entryWaitSeconds)));
     if (typeof saved.autoTrade === 'boolean') config.autoTrade = saved.autoTrade;
     if (typeof saved.newCandle === 'boolean') config.newCandle = saved.newCandle;
+    if (typeof saved.aiOff === 'boolean') config.aiOff = saved.aiOff;
+    if (typeof saved.aiOnly === 'string') config.aiOnly = saved.aiOnly;
     if (Number.isFinite(saved.entryDelayMs)) config.entryDelayMs = Math.max(0, Math.min(ENTRY_MAX_MS, saved.entryDelayMs));
     if (typeof saved.asset === 'string') config.asset = saved.asset;
   } catch {
