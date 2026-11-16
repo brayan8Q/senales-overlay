@@ -80,6 +80,7 @@ function createBotBridge({ dir = null, request = httpRequest } = {}) {
           connected: Boolean(s && s.connected),
           demo: s ? s.demo : null,
           balance: s && Number.isFinite(s.balance) ? s.balance : null,
+          panelOrders: s && s.panel_orders === false ? false : true, // false = el bot solo opera su propio seguimiento
           stake: s ? s.stake : null,
           factor: s ? s.factor : null,
           levels: s ? s.levels : null,
