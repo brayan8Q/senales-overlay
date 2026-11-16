@@ -1,5 +1,5 @@
 /**
- * Las 8 lecturas del panel, calculadas con las velas leidas de la pantalla:
+ * Las lecturas del panel, calculadas con las velas leidas de la pantalla:
  *
  *   1. Tendencia       hacia donde van las ultimas velas (hasta 12).
  *   2. EMA 50/200      media rapida contra media lenta. Se usan 50/200 cuando hay 200
@@ -9,7 +9,13 @@
  *   5. Mov. 1 min      cuanto se movio el precio en el ultimo minuto.
  *   6. Nivel abajo     soporte mas cercano por debajo del precio (y resistencia por encima).
  *   7. Sesion          sesion de mercado segun la hora. No vota (y en OTC no aplica).
- *   8. Resumen         cuantas lecturas apuntan hacia arriba y cuantas hacia abajo.
+ *   8. MACD 12/26/9    (16 nov 2026) histograma: de que lado esta y si crece o se apaga.
+ *   9. Volatilidad     (16 nov 2026) ATR de 14 velas contra el de 100: baja, normal o alta. No vota.
+ *  10. Temp. mayor     (16 nov 2026) hacia donde van las velas 4 veces mas largas (las de 1 min si la
+ *                      grafica es de 15 s).
+ *  11. Resumen         cuantas lecturas apuntan hacia arriba y cuantas hacia abajo.
+ * Las tres nuevas son las que listaba un bot ajeno y al panel le faltaban (pedido del usuario). Medidas
+ * sobre precios grabados no mejoran el acierto (49.5-50 %): se muestran y votan, no prometen nada.
  *
  * No hay precios reales (solo pixeles de la pantalla), asi que las distancias se
  * dan en "velas": 1 vela = el tamano tipico de una vela de esta grafica.
@@ -32,6 +38,11 @@ const EMA_PAIRS = [
   [5, 10],
 ];
 const SPARK_POINTS = 30;
+const MACD = [12, 26, 9];
+const ATR_SHORT = 14;
+const ATR_LONG = 100;
+const HIGHER = 4; // la temporalidad mayor junta las velas de 4 en 4
+const HIGHER_CANDLES = 12; // cuantas velas mayores se miran (48 de las de la grafica)
 
 const median = (values) => {
   const sorted = [...values].sort((a, b) => a - b);
@@ -252,6 +263,76 @@ function computeReadings({ candles, forming, prices = [], now = null, time, asse
   const sessionInfo = sessionAt(time, asset);
   const session = { key: 'session', name: 'Sesión', text: sessionInfo.text, lean: 'flat', vote: 0, detail: sessionInfo.detail };
 
+  // 8) MACD: media de 12 menos media de 26, y su senal de 9. Vota el lado del histograma.
+  let macd;
+  if (count < MACD[1] + MACD[2]) {
+    macd = { key: 'macd', name: 'MACD', text: 'faltan velas', lean: 'flat', vote: 0, detail: `Hay ${count} velas; se necesitan ${MACD[1] + MACD[2]}.` };
+  } else {
+    const fastM = emaSeries(closes, MACD[0]);
+    const slowM = emaSeries(closes, MACD[1]);
+    const line = fastM.map((v, i) => v - slowM[i]);
+    const signalLine = emaSeries(line, MACD[2]);
+    const hist = line.map((v, i) => v - signalLine[i]);
+    const h = hist[hist.length - 1];
+    const before = hist[hist.length - 2];
+    const macdVote = Math.abs(h) < unit * 0.03 ? 0 : Math.sign(h);
+    const growing = Math.abs(h) > Math.abs(before) && Math.sign(h) === Math.sign(before);
+    macd = {
+      key: 'macd',
+      name: 'MACD',
+      text: macdVote ? `${arrow[leanOf(macdVote)]}${growing ? '' : ' (se apaga)'}` : 'neutro',
+      lean: leanOf(macdVote),
+      vote: macdVote,
+      growing,
+      spark: spark(hist.slice(-TREND_CANDLES)),
+      detail: macdVote
+        ? `El histograma del MACD está del lado de ${macdVote > 0 ? 'arriba' : 'abajo'} y ${growing ? 'va creciendo' : 'se está apagando'}.`
+        : 'El histograma del MACD está pegado a cero: no dice nada.',
+    };
+  }
+
+  // 9) Volatilidad: tamano medio de las ultimas 14 velas contra el de las ultimas 100. No vota.
+  const ranges = all.map((c) => c.high - c.low);
+  const mean = (list) => list.reduce((s, v) => s + v, 0) / (list.length || 1);
+  let volatility;
+  if (count < ATR_SHORT * 2) {
+    volatility = { key: 'volatility', name: 'Volatilidad', text: 'midiendo…', lean: 'flat', vote: 0, detail: `Hay ${count} velas; se necesitan ${ATR_SHORT * 2}.` };
+  } else {
+    const ratio = mean(ranges.slice(-ATR_SHORT)) / (mean(ranges.slice(-ATR_LONG)) || 1);
+    const state = ratio >= 1.5 ? 'alta' : ratio <= 0.7 ? 'baja' : 'normal';
+    volatility = {
+      key: 'volatility',
+      name: 'Volatilidad',
+      text: `${state} ×${round1(ratio)}`,
+      lean: 'flat',
+      vote: 0,
+      ratio: round1(ratio),
+      state,
+      spark: spark(ranges.slice(-SPARK_POINTS)),
+      detail: `Las últimas ${ATR_SHORT} velas miden ${round1(ratio)} veces lo que miden las últimas ${Math.min(ATR_LONG, count)}. No cuenta como voto.`,
+    };
+  }
+
+  // 10) Temporalidad mayor: las velas juntadas de 4 en 4 (la grafica de 15 s vista en 1 min).
+  let higher;
+  if (count < HIGHER * 6) {
+    higher = { key: 'higher', name: 'Temp. mayor ×4', text: 'faltan velas', lean: 'flat', vote: 0, detail: `Hay ${count} velas; se necesitan ${HIGHER * 6}.` };
+  } else {
+    const big = [];
+    for (let i = count - 1; i >= 0 && big.length < HIGHER_CANDLES; i -= HIGHER) big.unshift(closes[i]);
+    const bigDrift = slope(big) * (big.length - 1);
+    const higherVote = Math.abs(bigDrift) < unit * 2 ? 0 : Math.sign(bigDrift);
+    higher = {
+      key: 'higher',
+      name: 'Temp. mayor ×4',
+      text: arrow[leanOf(higherVote)],
+      lean: leanOf(higherVote),
+      vote: higherVote,
+      spark: spark(big),
+      detail: `Vistas de ${HIGHER} en ${HIGHER}, las últimas ${big.length * HIGHER} velas ${higherVote ? `avanzaron ${Math.abs(inUnits(bigDrift))} velas hacia ${higherVote > 0 ? 'arriba' : 'abajo'}` : 'van de lado'}.`,
+    };
+  }
+
   // Agotamiento: que algo vaya subiendo no significa que siga. Cuenta en contra del movimiento
   // una racha larga de velas del mismo color, o el precio en el extremo de todo lo visto con RSI alto/bajo.
   const lastDir = all[count - 1].dir;
@@ -269,7 +350,7 @@ function computeReadings({ candles, forming, prices = [], now = null, time, asse
   const exhaustion = { key: 'exhaustion', vote: Math.sign(tired), signs };
 
   // 8) Resumen: cuantas lecturas apuntan a cada lado
-  const voters = [trend, ema, momentum, rsiReading, level, exhaustion];
+  const voters = [trend, ema, momentum, rsiReading, level, exhaustion, macd, higher];
   const ups = voters.filter((r) => r.vote > 0).length;
   const downs = voters.filter((r) => r.vote < 0).length;
   const balance = ups - downs;
@@ -281,7 +362,7 @@ function computeReadings({ candles, forming, prices = [], now = null, time, asse
     const sum = list.reduce((s, r) => s + Math.sign(r.vote), 0);
     return Math.abs(sum) >= 2 ? 2 * Math.sign(sum) : Math.sign(sum);
   };
-  const follow = group([trend, ema, momentum]);
+  const follow = group([trend, ema, momentum, macd, higher]);
   const reverse = group([rsiReading, level, exhaustion]);
   const text = `${ups} arriba, ${downs} abajo`;
   const summary = {
@@ -291,13 +372,13 @@ function computeReadings({ candles, forming, prices = [], now = null, time, asse
     lean: leanOf(balance),
     vote,
     detail:
-      `De 6 lecturas con dirección (tendencia, EMA, momentum, RSI, nivel, agotamiento): ${text}. ` +
+      `De 8 lecturas con dirección (tendencia, EMA, momentum, RSI, nivel, agotamiento, MACD, temporalidad mayor): ${text}. ` +
       `Aporta ${Math.abs(vote)} ${Math.abs(vote) === 1 ? 'voto' : 'votos'} a la señal.` +
       (signs.length ? ` Agotamiento: ${signs.join('; ')}.` : ''),
   };
 
   return {
-    items: [trend, ema, momentum, rsiReading, move, level, session, summary],
+    items: [trend, ema, momentum, rsiReading, move, level, session, macd, volatility, higher, summary],
     vote,
     follow,
     reverse,
@@ -330,6 +411,9 @@ function computeReadings({ candles, forming, prices = [], now = null, time, asse
         precio_en_minimo_de_lo_visto: atBottom,
       },
       sesion: session.text,
+      macd: macd.vote ? { lado: macd.lean, creciendo: Boolean(macd.growing) } : null,
+      volatilidad: volatility.state ? { estado: volatility.state, veces_lo_normal: volatility.ratio } : null,
+      temporalidad_mayor: higher.lean,
       resumen: text,
     },
   };

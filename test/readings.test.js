@@ -21,7 +21,7 @@ const SIDEWAYS = chain(Array.from({ length: 40 }, (_, i) => (i % 2 ? -3 : 3)));
 
 test('son 8 lecturas, en el orden del panel', () => {
   const r = read(RISING);
-  assert.deepEqual(r.items.map((i) => i.key), ['trend', 'ema', 'momentum', 'rsi', 'move', 'level', 'session', 'summary']);
+  assert.deepEqual(r.items.map((i) => i.key), ['trend', 'ema', 'momentum', 'rsi', 'move', 'level', 'session', 'macd', 'volatility', 'higher', 'summary']);
   for (const item of r.items) assert.ok(item.name && item.text && item.detail, item.key);
 });
 

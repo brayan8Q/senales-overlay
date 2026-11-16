@@ -544,7 +544,8 @@ api.onState((s) => {
       : s.bot && s.bot.online && !s.bot.pause
         ? 'Escaneando sin parar. Pulsa PREDECIR: sale el lado al instante y el bot entra en la DEMO.'
         : 'Escaneando sin parar. Pulsa PREDECIR para pedir una señal.';
-    $('signal-source').textContent = '';
+    // Los pares que mas pagan ahora, segun el bot (el pago es lo unico de un par que cambia la cuenta).
+    $('signal-source').textContent = s.bot && s.bot.top && s.bot.top.length ? `Pagan más ahora: ${s.bot.top.map((p) => `${p.name} ${p.payout} %`).join(' · ')}` : '';
   } else if (analyzing) {
     $('signal').className = s.newCandle && s.clockKnown ? 'waiting' : 'analysis';
     // Con la señal al abrir la vela, a media vela NO hay predicción: solo se espera la vela nueva
