@@ -453,7 +453,7 @@ function renderProgress(s) {
     const total = Math.max(1, s.candleSeconds * 1000);
     $('progress-fill').style.width = s.clockKnown ? `${Math.round(Math.min(1, Math.max(0, 1 - s.remainingMs / total)) * 100)}%` : '100%';
     $('progress-text').textContent = s.clockKnown
-      ? `Esperando la siguiente vela · abre en ${Math.ceil(s.remainingMs / 1000)} s`
+      ? `Próxima vela en ${Math.ceil(s.remainingMs / 1000)} s`
       : 'Esperando la siguiente vela…';
   } else if (s.phase === 'analysis' && s.thinking) {
     // Martingala en análisis: sale al abrir la vela nueva (cuenta regresiva hasta ahí).
