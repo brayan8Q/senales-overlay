@@ -298,3 +298,48 @@ test('con el bot: la martingala también sale 150 ms antes de la apertura', () =
   s = read(29860, 110, extra);
   assert.equal(s.signal.source, 'martingala');
 });
+
+// ---------- Dos segundos antes del cierre, y un segundo dentro de la vela nueva ----------
+test('dos segundos antes: el análisis arranca cuando a la vela le faltan 2 s, sigue 1 s en la vela nueva y ahí sale la señal', () => {
+  const t = createTimedTracker();
+  const read = (now, extra = {}) =>
+    t.update({ candles: UP, priceY: row(112), now, cycleMs: 3000, pauseMs: 5000, payout: 92, manual: false, newCandle: true, waitClock: true, syncBeforeMs: 2000, syncAfterMs: 1000, candle: clock(now), ...extra });
+  let s = read(9500); // faltan 5.5 s: antes empezaba aquí; ya no
+  assert.equal(s.phase, 'waiting');
+  s = read(12900);
+  assert.equal(s.phase, 'waiting');
+  s = read(13000); // faltan 2 s: arranca
+  assert.equal(s.phase, 'analysis');
+  assert.equal(s.remainingMs, 3000);
+  s = read(15000, { advice: IA_UP }); // abre la vela nueva: se sigue leyendo aunque la IA ya contestó
+  assert.equal(s.phase, 'analysis');
+  s = read(15900, { advice: IA_UP });
+  assert.equal(s.phase, 'analysis');
+  s = read(16000, { advice: IA_UP }); // 1 s dentro de la vela nueva: sale la señal
+  assert.equal(s.phase, 'signal');
+  assert.equal(s.signal.source, 'ia');
+  assert.equal(s.signal.dir, 'up');
+  // Una por vela: la siguiente vuelve a arrancar 2 s antes del cierre.
+  s = read(19000);
+  assert.notEqual(s.phase, 'signal');
+  s = read(27900);
+  assert.equal(s.phase, 'waiting');
+  s = read(28000);
+  assert.equal(s.phase, 'analysis');
+});
+
+test('dos segundos antes: la martingala también sale 1 s dentro de la vela nueva', () => {
+  const t = createTimedTracker();
+  const read = (now, price, extra = {}) =>
+    t.update({ candles: UP, priceY: row(price), now, cycleMs: 3000, pauseMs: 5000, payout: 92, manual: false, newCandle: true, martin: 1, martinThinkMs: 2500, syncBeforeMs: 2000, syncAfterMs: 1000, candle: clock(now), ...extra });
+  read(13000, 112);
+  let s = read(16000, 112);
+  assert.equal(s.phase, 'signal');
+  s = read(19000, 110); // perdió
+  assert.equal(s.thinking, 1);
+  assert.equal(s.remainingMs, 12000); // hasta 1 s dentro de la vela siguiente
+  s = read(30500, 110);
+  assert.equal(s.phase, 'analysis');
+  s = read(31000, 110);
+  assert.equal(s.signal.source, 'martingala');
+});

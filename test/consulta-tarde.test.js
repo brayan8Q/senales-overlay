@@ -332,7 +332,7 @@ test('a la IA se le pregunta en el segundo 12; la señal sale al abrir la vela; 
       assert.equal(ai.asked.length, askedBefore + 1, 'una consulta por predicción');
       askedBefore = ai.asked.length;
       pendingAsk = ai.asked[ai.asked.length - 1];
-      assert.ok(pendingAsk.elapsed >= 11500 && pendingAsk.elapsed < 11500 + READ_MS, `se preguntó en el segundo ${pendingAsk.elapsed / 1000} de la vela`);
+      assert.ok(pendingAsk.elapsed >= 13000 && pendingAsk.elapsed < 13000 + READ_MS, `se preguntó en el segundo ${pendingAsk.elapsed / 1000} de la vela`);
       const when = pendingAsk.snapshot.cuando_se_abre_la_operacion;
       assert.ok(when && when.en_segundos > 2.6 && when.en_segundos <= 6, `cuando_se_abre_la_operacion: ${JSON.stringify(when)}`);
       assert.match(when.explicacion, /se abre cuando CIERRE la vela en curso y abra la siguiente/);
@@ -348,7 +348,7 @@ test('a la IA se le pregunta en el segundo 12; la señal sale al abrir la vela; 
     const started = s.phase === 'signal' && s.signal && (previous !== 'signal' || s.signal !== previousSignal);
     if (started) {
       const elapsed = nowMs - market.startedAt;
-      assert.ok(elapsed <= 2 * READ_MS, `la señal salió a los ${elapsed} ms de abrir la vela`);
+      assert.ok(elapsed >= 1000 && elapsed <= 1000 + 2 * READ_MS, `la señal salió a los ${elapsed} ms de abrir la vela`);
       const closed = market.closed[market.closed.length - 1];
       const flipped = pendingAsk && pendingAsk.color !== 'flat' && colorOf(closed) !== 'flat' && colorOf(closed) !== pendingAsk.color;
       if (s.signal.source === 'martingala') {

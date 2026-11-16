@@ -530,6 +530,11 @@ function createTimedTracker() {
       // Con el bot: la senal (y la martingala) sale este tiempo ANTES de que abra la vela, para que la
       // orden llegue a Pocket justo al abrir (el bot espera al segundo entero). 0 = al abrir.
       openLeadMs = 0,
+      // DOS SEGUNDOS ANTES (15 nov 2026, noche): el analisis arranca cuando a la vela le falta
+      // `syncBeforeMs`, sigue `syncAfterMs` dentro de la vela nueva (para ver como arranca) y ahi
+      // sale la senal. 0 = como antes (analisis de `pauseMs` que termina al abrir la vela).
+      syncBeforeMs = 0,
+      syncAfterMs = 0,
     }) {
       const completed = candles.slice(0, -1);
       const aligned = Boolean(align) && manual; // solo con el boton PREDECIR
@@ -690,9 +695,11 @@ function createTimedTracker() {
       if (watching && clean) {
         const elapsed = now - watching.time;
         // En modo manual la senal sale en cuanto contesta la IA, o se la espera un poco mas.
-        const answered = manual && Boolean(advice);
-        const waiting = manual && waitForAdvice && elapsed < pauseMs + MAX_HOLD_MS;
-        if (answered || (elapsed >= pauseMs && !waiting)) {
+        const answered = manual && Boolean(advice) && !watching.endAt;
+        const waiting = manual && waitForAdvice && elapsed < pauseMs + MAX_HOLD_MS && !watching.endAt;
+        // Analisis a caballo entre dos velas: termina a su hora (ya dentro de la vela nueva).
+        const done = watching.endAt ? now >= watching.endAt : elapsed >= pauseMs;
+        if (answered || (done && !waiting)) {
           remember(moveSince(watching.mark, priceY, completed, quote));
           watching = null;
           observed = true;
@@ -748,7 +755,8 @@ function createTimedTracker() {
         let clockWait = false; // sin reloj: se espera a que vuelva antes de fijar la hora de salida
         if (smart && newCandle && nextMartin.openAt === undefined) {
           if (clockKnown && Number.isFinite(candle.remainingMs)) {
-            nextMartin.openAt = now + candle.remainingMs + (candle.remainingMs < MARTIN_SYNC_MIN_MS ? candle.seconds * 1000 : 0);
+            // (Con `syncAfterMs` la martingala tambien sale ese tiempo despues de abrir la vela.)
+            nextMartin.openAt = now + candle.remainingMs + syncAfterMs + (candle.remainingMs < MARTIN_SYNC_MIN_MS ? candle.seconds * 1000 : 0);
           } else if (waitClock) clockWait = true;
           else nextMartin.openAt = null;
         }
@@ -763,7 +771,7 @@ function createTimedTracker() {
         const smart = Number.isFinite(martinThinkMs) && martinThinkMs >= 0;
         const synced = smart && Number.isFinite(nextMartin.openAt);
         if (synced && clockKnown && Number.isFinite(candle.remainingMs)) {
-          const estimate = now + candle.remainingMs; // cuando abre la vela siguiente, segun el reloj de ahora
+          const estimate = now + candle.remainingMs + syncAfterMs; // cuando toca salir, segun el reloj de ahora
           if (Math.abs(estimate - nextMartin.openAt) < 1000) nextMartin.openAt = estimate;
         }
         const waited = now - nextMartin.since;
@@ -854,7 +862,8 @@ function createTimedTracker() {
         if (!observed) {
           // El analisis solo arranca en su ventana: cuando a la vela le falta justo lo que dura.
           const inWindow = candle.remainingMs <= pauseMs + SYNC_LEAD_MS && candle.remainingMs >= pauseMs - SYNC_LATE_MS;
-          syncHold = pauseMs > 0 ? !inWindow : !justOpened;
+          if (syncBeforeMs > 0 && pauseMs > 0) syncHold = !(candle.remainingMs <= syncBeforeMs); // arranca cuando faltan 2 s
+          else syncHold = pauseMs > 0 ? !inWindow : !justOpened;
         }
         else syncHold = !justOpened && now - observedAt < SYNC_MAX_WAIT_MS;
       }
@@ -866,6 +875,8 @@ function createTimedTracker() {
         const mark = markNow(priceY, completed, quote);
         if (mark && pauseMs > 0 && !observed) {
           watching = { mark, time: now };
+          // Dos segundos antes: el analisis termina `syncAfterMs` despues de que abra la vela nueva.
+          if (syncBeforeMs > 0 && newCandle && clockKnown && Number.isFinite(candle.remainingMs)) watching.endAt = now + candle.remainingMs + syncAfterMs;
         } else if (mark) {
           const trend = trendSignal(candles); // incluye la vela en curso
           const current = candles[candles.length - 1];
@@ -1051,7 +1062,7 @@ function createTimedTracker() {
         remainingMs = thinkLeftMs;
       } else if (watching) {
         phase = 'analysis';
-        remainingMs = Math.max(0, pauseMs - (now - watching.time));
+        remainingMs = watching.endAt ? Math.max(0, watching.endAt - now) : Math.max(0, pauseMs - (now - watching.time));
       } else if (waiting || syncHold) {
         phase = 'waiting'; // esperando a que abra la vela siguiente
         remainingMs = clockKnown ? candle.remainingMs : 0;
