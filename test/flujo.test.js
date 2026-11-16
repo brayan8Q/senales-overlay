@@ -117,7 +117,7 @@ const fakeImage = () => ({
   toPNG: () => Buffer.alloc(8),
 });
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'lector-flujo-'));
-fs.writeFileSync(path.join(userData, 'config.json'), JSON.stringify({ pauseSeconds: 3, cycleSeconds: 5, manual: true, alwaysSignal: true, untilClose: true, martinLevels: 0, entryWaitSeconds: 0, newCandle: false }));
+fs.writeFileSync(path.join(userData, 'config.json'), JSON.stringify({ pauseSeconds: 3, cycleSeconds: 5, manual: true, alwaysSignal: true, untilClose: true, martinLevels: 0, entryWaitSeconds: 0, newCandle: false, aiOff: false }));
 class FakeWindow {
   constructor() {
     this.webContents = { send: (_channel, state) => sent.push(state) };
@@ -202,7 +202,7 @@ test('arranca, lee la gráfica y pone el reloj de la vela en hora', async () => 
     // El marcador va SIEMPRE sobre la vela en curso, también en la misma lectura en que cierra una.
     if (i >= 3) {
       assert.ok(s.scan && s.scan.current, `lectura ${i}: hay marcador`);
-      assert.equal(s.scan.mode, 'follow');
+      assert.equal(s.scan.mode, 'analysis'); // con el botón el haz pasa siempre, también en reposo (16 nov 2026)
       assert.equal(s.scan.current.x, formingX(), `lectura ${i}: el marcador está en la vela en curso`);
       assert.equal(s.scan.missing, false);
     }

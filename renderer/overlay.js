@@ -519,7 +519,7 @@ api.onState((s) => {
   predict.classList.toggle('hidden', !manual);
   predict.disabled = !(resting && s.ready);
   const noSide = s.phase === 'signal' && !(s.signal && s.signal.dir); // salió ESPERAR: no hay predicción
-  predict.textContent = waiting ? 'Esperando la vela…' : analyzing ? 'Analizando…' : noSide ? 'Sin predicción…' : s.phase === 'signal' ? (s.entryWait ? 'Esperando tu entrada' : 'Operación en curso') : 'PREDECIR';
+  predict.textContent = waiting ? 'Esperando la vela…' : analyzing ? 'Analizando…' : noSide ? 'Sin predicción…' : s.phase === 'signal' ? (s.entryWait ? (s.bot && s.bot.online && !s.bot.pause ? 'Entrando…' : 'Esperando tu entrada') : 'Operación en curso') : 'PREDECIR';
 
   if (waiting) {
     $('signal').className = 'waiting';
@@ -539,7 +539,9 @@ api.onState((s) => {
     $('signal-label').textContent = 'LISTO';
     $('signal-detail').textContent = s.lastResult
       ? `La última señal ${s.lastResult}. Pulsa PREDECIR para otra.`
-      : 'Pulsa PREDECIR para pedir una señal.';
+      : s.bot && s.bot.online && !s.bot.pause
+        ? 'Escaneando sin parar. Pulsa PREDECIR: sale el lado al instante y el bot entra en la DEMO.'
+        : 'Escaneando sin parar. Pulsa PREDECIR para pedir una señal.';
     $('signal-source').textContent = '';
   } else if (analyzing) {
     $('signal').className = s.newCandle && s.clockKnown ? 'waiting' : 'analysis';
