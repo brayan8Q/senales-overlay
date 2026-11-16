@@ -135,7 +135,7 @@ const fakeImage = () => ({
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'lector-consulta-'));
 fs.writeFileSync(
   path.join(userData, 'config.json'),
-  JSON.stringify({ pauseSeconds: 5, cycleSeconds: 3, manual: false, alwaysSignal: false, asset: 'EUR/USD OTC', payout: 92, antiRebound: false, patternVeto: false, martinLevels: 1, entryWaitSeconds: 0, newCandle: true, autoTrade: false, aiModel: 'falso-1' }),
+  JSON.stringify({ pauseSeconds: 5, cycleSeconds: 3, manual: false, alwaysSignal: false, asset: 'EUR/USD OTC', payout: 92, antiRebound: false, patternVeto: false, martinLevels: 1, entryWaitSeconds: 0, newCandle: true, autoTrade: false, aiModel: 'falso-1', aiOff: false }),
 );
 // La ventana de la fuente interna: su depurador entrega aquí los mensajes del websocket.
 const terminal = { listener: null, url: null, visible: false, pay: 'Payout\n+58%\n+$15.80', sym: 'EUR/USD OTC', scripts: [] };
