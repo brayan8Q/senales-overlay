@@ -332,11 +332,13 @@ test('a la IA se le pregunta en el segundo 12; la señal sale al abrir la vela; 
       assert.equal(ai.asked.length, askedBefore + 1, 'una consulta por predicción');
       askedBefore = ai.asked.length;
       pendingAsk = ai.asked[ai.asked.length - 1];
-      assert.ok(pendingAsk.elapsed >= 9000 && pendingAsk.elapsed < 12000 + READ_MS, `se preguntó en el segundo ${pendingAsk.elapsed / 1000} de la vela`);
+      assert.ok(pendingAsk.elapsed >= 11500 && pendingAsk.elapsed < 11500 + READ_MS, `se preguntó en el segundo ${pendingAsk.elapsed / 1000} de la vela`);
       const when = pendingAsk.snapshot.cuando_se_abre_la_operacion;
       assert.ok(when && when.en_segundos > 2.6 && when.en_segundos <= 6, `cuando_se_abre_la_operacion: ${JSON.stringify(when)}`);
       assert.match(when.explicacion, /se abre cuando CIERRE la vela en curso y abra la siguiente/);
       assert.equal(pendingAsk.snapshot.tu_respuesta_tarda, undefined);
+      // El plazo es un entero: la conexión real rechaza uno con decimales (pasó en vivo el 15 nov).
+      assert.ok(Number.isInteger(pendingAsk.timeoutMs), `plazo ${pendingAsk.timeoutMs}`);
       // (El reloj de la vela va en la consulta cuando la memoria del mercado ya sabe cuánto dura una vela.)
       // El plazo para contestar llega hasta que abre la vela.
       assert.ok(Math.abs(pendingAsk.timeoutMs - when.en_segundos * 1000) < 60, `plazo ${pendingAsk.timeoutMs} ms`);

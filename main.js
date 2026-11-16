@@ -70,7 +70,9 @@ const AI_MANUAL_EXTRA_MS = 5000; // modo manual: cuanto mas se espera a la IA pa
 // (15 nov 18:35, en vivo: preguntando a 3 s del cierre la IA solo contesto 2 de 12 consultas y las
 // senales salieron por reglas. Vuelve a 6 s -al empezar el analisis, como cuando si contestaba-
 // hasta ver en el registro (E,ia-fallo / E,ia-tarde) por que. La confirmacion con la vela cerrada cubre el resto.)
-const AI_ASK_BEFORE_CLOSE_MS = 6000;
+// (18:50: la causa no era el tiempo sino un plazo con decimales, ya corregido. Se pregunta a 3.5 s
+// del cierre -segundo 11.5 de 15-: la IA contesta en 1 a 2 s.)
+const AI_ASK_BEFORE_CLOSE_MS = 3500;
 const AI_ANSWER_GRACE_MS = 400; // askCouncil descuenta esto de la ventana: asi el plazo llega hasta que sale la senal
 // Retraso de entrada: lo que tarda el usuario en poner la orden despues de ver la senal. Se
 // estima solo, comparando cuando aparece la senal con cuando la plataforma muestra el globo
@@ -695,7 +697,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15m la fuente interna (y con ella el reloj de la vela) ya no se suelta al abrir una operacion: solo tras 12 s sin cuadrar · 2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15n la IA vuelve a contestar en las senales normales (plazo entero) y se le pregunta en el segundo 11.5 · 2026-11-15m la fuente interna (y con ella el reloj de la vela) ya no se suelta al abrir una operacion: solo tras 12 s sin cuadrar · 2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -1048,7 +1050,8 @@ function askCouncil(candles, moves, ticks, windowMs, readings = null, timing = n
             : `${config.cycleSeconds} segundos DESPUES de ese momento, respecto al precio de ese momento (no respecto al de estos datos)`),
       };
     }
-    askOne(id, personal, windowMs - 400, requestId);
+    // (Entero: AbortSignal.timeout rechaza un plazo con decimales, y lo que le falta a la vela los trae.)
+    askOne(id, personal, Math.max(500, Math.round(windowMs - 400)), requestId);
   }
   // E,ms,ia-pregunta,a quienes,plazo en ms
   record(`E,${Date.now()},ia-pregunta,${ids.join(' ')},${Math.round(windowMs - 400)}`);
