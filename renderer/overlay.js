@@ -537,7 +537,9 @@ api.onState((s) => {
   } else if (resting) {
     $('signal').className = 'wait';
     $('signal-label').textContent = 'LISTO';
-    $('signal-detail').textContent = s.lastResult
+    $('signal-detail').textContent = s.bot && s.bot.enabled && s.bot.online && s.bot.pause
+      ? `EL BOT TODAVÍA NO ENTRA: ${s.bot.pause}.`
+      : s.lastResult
       ? `La última señal ${s.lastResult}. Pulsa PREDECIR para otra.`
       : s.bot && s.bot.online && !s.bot.pause
         ? 'Escaneando sin parar. Pulsa PREDECIR: sale el lado al instante y el bot entra en la DEMO.'

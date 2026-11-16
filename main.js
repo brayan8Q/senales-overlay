@@ -37,6 +37,7 @@ const { niveles, VENTANA: LEVEL_CANDLES } = require('./src/levels');
 const { createCandleClock } = require('./src/candleclock');
 const { PATTERNS, PATTERN_KEYS } = require('./src/formations');
 const { createFeed, assetKey, PERIODS: FEED_PERIODS } = require('./src/feed');
+const { pairTolerance, pickChartPair } = require('./src/chartpair');
 const { fitPriceMap, toScreen } = require('./src/pricemap');
 const { countOrderMark, MARK_MIN } = require('./src/ordermark');
 const { createBotBridge } = require('./src/botbridge');
@@ -115,6 +116,7 @@ const config = {
   // senal y su martingala las abre el bot en la cuenta DEMO; el panel cuenta desde esa entrada.
   autoTrade: true,
   aiOff: true, // sin IA: no se consulta a ninguna (16 nov 2026); false = se consulta a `aiOnly`
+  autoAsset: true, // el par de la grafica se reconoce solo (16 nov 2026); false = solo vale lo escrito en «Activo»
   manualMartin: false, // con el boton, la martingala NO sale por su cuenta (16 nov 2026); true = sale sola, como en automatico
   aiOnly: 'openai', // una sola IA consultada (16 nov 2026): la mas barata que contesta a tiempo; '' = todas las que tengan clave
   // La prediccion sale siempre al abrir una vela nueva (se analiza al final de la vela en curso).
@@ -735,7 +737,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-16c con boton: PREDECIR contesta al instante, el escaner pasa siempre y el bot entra solo cuando pulsas (sin IA, sin vetos, sin martingala por su cuenta) · 2026-11-16b sin IA: el panel escanea y el bot opera solo con el seguimiento de la vela (color + milisegundos) · 2026-11-16a una sola IA (GPT-4.1 mini); el bot sigue el ritmo de la vela por su cuenta · 2026-11-15t la prediccion con IA arranca al INICIAR cada vela (no antes) y sale en cuanto contesta, dentro de esa vela · 2026-11-15s el haz del escaner pasa siempre (tambien mientras se espera la vela) · 2026-11-15r el analisis y la IA arrancan 2 s antes de cerrar la vela, siguen 1 s en la vela nueva y ahi sale la senal · 2026-11-15q letrero a la par de la vela (dice por que no entro en esta y cuando sale la proxima) · 2026-11-15p pago real del bot · la orden sale 150 ms antes de abrir la vela (entrada pegada a la apertura) · soporte y resistencia firmes · 2026-11-15o sin el reloj exacto de la vela no se predice (ni senal ni martingala a media vela) · 2026-11-15n la IA vuelve a contestar en las senales normales (plazo entero) y se le pregunta en el segundo 11.5 · 2026-11-15m la fuente interna (y con ella el reloj de la vela) ya no se suelta al abrir una operacion: solo tras 12 s sin cuadrar · 2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-16d el par de la grafica se reconoce solo (precio del eje contra los precios del bot) y el bot entra al pulsar PREDECIR en el par que tengas a la vista · 2026-11-16c con boton: PREDECIR contesta al instante, el escaner pasa siempre y el bot entra solo cuando pulsas (sin IA, sin vetos, sin martingala por su cuenta) · 2026-11-16b sin IA: el panel escanea y el bot opera solo con el seguimiento de la vela (color + milisegundos) · 2026-11-16a una sola IA (GPT-4.1 mini); el bot sigue el ritmo de la vela por su cuenta · 2026-11-15t la prediccion con IA arranca al INICIAR cada vela (no antes) y sale en cuanto contesta, dentro de esa vela · 2026-11-15s el haz del escaner pasa siempre (tambien mientras se espera la vela) · 2026-11-15r el analisis y la IA arrancan 2 s antes de cerrar la vela, siguen 1 s en la vela nueva y ahi sale la senal · 2026-11-15q letrero a la par de la vela (dice por que no entro en esta y cuando sale la proxima) · 2026-11-15p pago real del bot · la orden sale 150 ms antes de abrir la vela (entrada pegada a la apertura) · soporte y resistencia firmes · 2026-11-15o sin el reloj exacto de la vela no se predice (ni senal ni martingala a media vela) · 2026-11-15n la IA vuelve a contestar en las senales normales (plazo entero) y se le pregunta en el segundo 11.5 · 2026-11-15m la fuente interna (y con ella el reloj de la vela) ya no se suelta al abrir una operacion: solo tras 12 s sin cuadrar · 2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -817,8 +819,82 @@ function botPause() {
   if (!status.online) return status.connected && status.demo !== true ? 'su cuenta no es DEMO' : 'el bot no está abierto';
   if (status.panelOrders === false) return 'el bot opera solo con el seguimiento de la vela';
   if (!config.asset) return 'falta escribir el par en «Activo»';
-  if (sourceInfo.active !== 'INTERNA') return 'no confirmo que la gráfica sea de ese par (fuente interna inactiva)';
+  if (sourceInfo.active !== 'INTERNA') return pairHunt.note || 'no confirmo que la gráfica sea de ese par (fuente interna inactiva)';
   return '';
+}
+// ---------- EL PAR DE LA GRAFICA, SOLO (16 nov 2026) ----------
+// Orden del usuario: «necesito que cuando diga PREDECIR el sistema apueste en automatico». De 10:47 a 12:42 pulso
+// 23 veces y el bot no entro ninguna: el cambiaba de par en la grafica y «Activo» seguia en AUD/CAD OTC.
+// Ahora el panel reconoce el par: el precio que se lee del eje de la pantalla (medido ese dia contra sus
+// operaciones: exacto a menos de 1 pip) se compara con el precio de todos los pares que sigue el bot. El que
+// coincide dos veces seguidas se pone en «Activo»; la fuente interna lo confirma despues por la forma de las
+// velas, y solo entonces el bot puede entrar. Registro: F,ms,par,auto,VIEJO -> NUEVO (pantalla · Pocket).
+let screenQuote = null; // precio leido del eje de la pantalla: { value, at, pip }
+let screenMismatch = 0; // lecturas seguidas en que la pantalla y la fuente interna dan precios distintos
+const pairHunt = { busy: false, at: 0, seen: '', count: 0, tried: new Map(), switchedAt: 0, note: '' };
+/** Pone el par (campo «Activo»): memoria del mercado propia y fuente interna a ubicarse de nuevo. */
+function applyAsset(value) {
+  config.asset = String(value || '').trim().slice(0, 60);
+  saveConfig();
+  // Cada activo tiene su propia memoria del mercado.
+  if (marketMemory) {
+    marketMemory.setAsset(config.asset);
+    memoryInfo = null;
+  }
+  feedMap = null; // otro par: la fuente interna se vuelve a ubicar
+  feedPeriod = 0;
+  feedMisses = 0;
+  screenMismatch = 0;
+  alignVisorAsset(Date.now()); // la terminal demo cambia ya a ese par (no se espera a la siguiente ronda)
+}
+async function followChartPair(now) {
+  if (config.autoAsset === false || !config.internalSource) return;
+  if (sourceInfo.active === 'INTERNA') {
+    pairHunt.seen = '';
+    pairHunt.count = 0;
+    pairHunt.note = '';
+    return;
+  }
+  if (pairHunt.busy || now - pairHunt.at < 1200) return;
+  if (!screenQuote || now - screenQuote.at > 1500 || !bot.status().online) return;
+  if (now - pairHunt.switchedAt < 9000) return; // el par recien puesto necesita unos segundos para cuadrar
+  pairHunt.busy = true;
+  pairHunt.at = now;
+  try {
+    const answer = await bot.prices();
+    const rows = answer && answer.ok && Array.isArray(answer.prices) ? answer.prices : [];
+    const quote = screenQuote;
+    if (!rows.length || !quote || Date.now() - quote.at > 2500) return;
+    const stuck = pairHunt.switchedAt > 0 && Date.now() - pairHunt.switchedAt > 20000;
+    const found = pickChartPair({ rows, quote, current: config.asset, tried: pairHunt.tried, now: Date.now(), stuck });
+    if (!found.pick) {
+      pairHunt.seen = '';
+      pairHunt.count = 0;
+      pairHunt.note = found.same ? '' : 'no reconozco el par de la gráfica entre los de Pocket (escríbelo en «Activo»)';
+      return;
+    }
+    const [symbol, name, price] = found.pick;
+    if (pairHunt.seen === symbol) pairHunt.count++;
+    else {
+      pairHunt.seen = symbol;
+      pairHunt.count = 1;
+    }
+    pairHunt.note = `reconociendo el par de la gráfica (${name || symbol})…`;
+    if (pairHunt.count < 2) return; // dos coincidencias seguidas: el precio se movio y siguio igual
+    const from = config.asset || '—';
+    pairHunt.tried.set(symbol, Date.now());
+    pairHunt.switchedAt = Date.now();
+    pairHunt.seen = '';
+    pairHunt.count = 0;
+    record(`F,${Date.now()},par,auto,${from} -> ${name || symbol} (pantalla ${quote.value.toFixed(5)} · Pocket ${price})`);
+    applyAsset(name || symbol);
+    pairHunt.note = `par de la gráfica: ${name || symbol}; ubicando la fuente interna…`;
+    publish();
+  } catch {
+    /* el bot no contesto: se intenta en la siguiente */
+  } finally {
+    pairHunt.busy = false;
+  }
 }
 /** Automatico en espera: el bot esta abierto pero no se puede confirmar el par en la pantalla. */
 const autoHold = () => !config.manual && config.autoTrade && bot.status().online && sourceInfo.active !== 'INTERNA';
@@ -1144,6 +1220,7 @@ function loadConfig() {
     if (typeof saved.autoTrade === 'boolean') config.autoTrade = saved.autoTrade;
     if (typeof saved.newCandle === 'boolean') config.newCandle = saved.newCandle;
     if (typeof saved.manualMartin === 'boolean') config.manualMartin = saved.manualMartin;
+    if (typeof saved.autoAsset === 'boolean') config.autoAsset = saved.autoAsset;
     if (typeof saved.aiOff === 'boolean') config.aiOff = saved.aiOff;
     if (typeof saved.aiOnly === 'string') config.aiOnly = saved.aiOnly;
     if (Number.isFinite(saved.entryDelayMs)) config.entryDelayMs = Math.max(0, Math.min(ENTRY_MAX_MS, saved.entryDelayMs));
@@ -1393,11 +1470,29 @@ async function scanTick() {
         price = inner.price;
         quote = inner.quote;
         priceText = inner.priceText;
+        // Comprobacion cruzada (16 nov): la pantalla debe ir al mismo precio que la fuente interna. Si el usuario
+        // cambio de par, se nota aqui en un par de segundos y la fuente se suelta (antes tardaba 12-30 s).
+        if (config.autoAsset !== false && pixelPriceY !== null && (!screenQuote || now - screenQuote.at >= 600)) {
+          const seen = readAxis(pixels.data, pixels.width, pixels.height, pixelForming ? pixelForming.x1 + 4 : 0);
+          if (seen && seen.anchored) {
+            const value = seen.at(pixelPriceY);
+            screenQuote = { value, at: now, pip: seen.pip };
+            screenMismatch = Number.isFinite(inner.price) && Math.abs(value - inner.price) > 3 * pairTolerance(inner.price, seen.pip) ? screenMismatch + 1 : 0;
+            if (screenMismatch >= 4) {
+              screenMismatch = 0;
+              feedMap = null;
+              feedPeriod = 0;
+              record(`F,${now},par,otro-precio,pantalla ${value.toFixed(5)} · fuente interna ${inner.price}`);
+            }
+          }
+        }
       } else {
         axis = readAxis(pixels.data, pixels.width, pixels.height, pixelForming ? pixelForming.x1 + 4 : 0);
         price = axis && axis.anchored && priceY !== null ? axis.at(priceY) : null;
         quote = price === null ? null : { value: price, perPixel: axis.perPixel };
         priceText = price === null ? null : price.toFixed(axis.decimals);
+        if (price !== null) screenQuote = { value: price, at: now, pip: axis.pip };
+        followChartPair(now); // sin fuente interna: ¿la grafica esta en otro par? (no bloquea la lectura)
       }
       if (priceText) {
         record(`T,${now},${priceText},${axis.pip}${inner ? ',i' : ''}`); // registro del precio real (i = fuente interna)
@@ -1805,6 +1900,8 @@ async function scanTick() {
         if (last.signal.dir && last.entryWait && !botPause()) {
           sendToBot(last.signal, now);
           openSignal.order = botOrder;
+        } else if (last.signal.dir && last.entryWait && config.autoTrade) {
+          record(`O,${now},no-enviada,${String(botPause()).replace(/[,\r\n]+/g, ' ').slice(0, 160)}`);
         }
         // E,ms,martingala,nivel,lado: entrada de seguimiento porque la senal anterior perdio.
         if (last.signal.martin) record(`E,${now},martingala,${last.signal.martin},${last.signal.dir}`);
@@ -2090,16 +2187,9 @@ ipcMain.on('set-manual', (_e, value) => {
 
 // Nombre del activo, solo como contexto para la IA.
 ipcMain.on('set-asset', (_e, value) => {
-  config.asset = String(value || '').trim().slice(0, 60);
-  saveConfig();
-  // Cada activo tiene su propia memoria del mercado.
-  if (marketMemory) {
-    marketMemory.setAsset(config.asset);
-    memoryInfo = null;
-  }
-  feedMap = null; // otro par: la fuente interna se vuelve a ubicar
-  feedPeriod = 0;
-  feedMisses = 0;
+  applyAsset(value);
+  pairHunt.tried.clear();
+  pairHunt.switchedAt = 0;
   publish();
 });
 
