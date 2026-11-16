@@ -87,6 +87,10 @@ const SYNC_MAX_WAIT_MS = 20000; // tope de espera con el analisis ya hecho (por 
 // (salia en el segundo 6). Sale al abrir la vela siguiente a la de la perdida; si a esa vela le
 // falta menos que esto, a la que le sigue (no daria tiempo de analizar nada).
 const MARTIN_SYNC_MIN_MS = 1500;
+// SIN RELOJ NO SE PREDICE (15 nov 2026, noche): con `waitClock`, si no se sabe en que segundo va la
+// vela no sale ni senal ni martingala (antes salian «como antes», a media vela). La martingala
+// espera este tiempo a que vuelva el reloj; si no vuelve, se suelta.
+const CLOCK_WAIT_MS = 30000;
 const MARTIN_ALERT_MS = 1500;
 const MARTIN_ALERT_PART = 0.25;
 const OPPOSITE = { up: 'down', down: 'up' };
@@ -522,6 +526,7 @@ function createTimedTracker() {
       externalAwait = false,
       externalResult = null,
       lastCandle = null,
+      waitClock = false, // sin reloj de la vela no se predice (ver CLOCK_WAIT_MS)
     }) {
       const completed = candles.slice(0, -1);
       const aligned = Boolean(align) && manual; // solo con el boton PREDECIR
@@ -737,12 +742,22 @@ function createTimedTracker() {
       let thinkLeftMs = 0; // cuanto falta para que salga
       if (nextMartin && !pending) {
         const smart = Number.isFinite(martinThinkMs) && martinThinkMs >= 0;
+        let clockWait = false; // sin reloj: se espera a que vuelva antes de fijar la hora de salida
         if (smart && newCandle && nextMartin.openAt === undefined) {
-          nextMartin.openAt =
-            clockKnown && Number.isFinite(candle.remainingMs)
-              ? now + candle.remainingMs + (candle.remainingMs < MARTIN_SYNC_MIN_MS ? candle.seconds * 1000 : 0)
-              : null;
+          if (clockKnown && Number.isFinite(candle.remainingMs)) {
+            nextMartin.openAt = now + candle.remainingMs + (candle.remainingMs < MARTIN_SYNC_MIN_MS ? candle.seconds * 1000 : 0);
+          } else if (waitClock) clockWait = true;
+          else nextMartin.openAt = null;
         }
+        if (clockWait && now - nextMartin.since >= CLOCK_WAIT_MS) {
+          lastResult = 'martingala suelta: no hubo reloj de la vela para darla a tiempo';
+          nextMartin = null;
+        }
+      }
+      if (nextMartin && !pending && nextMartin.openAt === undefined && waitClock && Number.isFinite(martinThinkMs) && martinThinkMs >= 0 && newCandle) {
+        thinking = true; // esperando el reloj de la vela
+      } else if (nextMartin && !pending) {
+        const smart = Number.isFinite(martinThinkMs) && martinThinkMs >= 0;
         const synced = smart && Number.isFinite(nextMartin.openAt);
         if (synced && clockKnown && Number.isFinite(candle.remainingMs)) {
           const estimate = now + candle.remainingMs; // cuando abre la vela siguiente, segun el reloj de ahora
@@ -838,6 +853,8 @@ function createTimedTracker() {
         }
         else syncHold = !justOpened && now - observedAt < SYNC_MAX_WAIT_MS;
       }
+      // Sin reloj de la vela no se empieza nada: ni analisis ni senal (se espera a tenerlo).
+      if (newCandle && waitClock && !clockKnown && !hold && !pending && !watching && !nextMartin && status === 'ok' && (!manual || armed)) syncHold = true;
 
       // 3) Sin senal ni analisis en curso: empieza lo que toque (en manual, solo si se pidio).
       if (!hold && !syncHold && !pending && !watching && !nextMartin && status === 'ok' && (!manual || armed)) {
@@ -1124,4 +1141,4 @@ function createTimedTracker() {
   };
 }
 
-module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum, EARLY_CANDLE_MS, PRICE_LOST_MS, NO_SIGNAL_MS, AI_STREAK_BRAKE, ENTRY_SEEN_LAG_MS, EXTERNAL_WAIT_MS, SYNC_LEAD_MS, SYNC_LATE_MS, SYNC_OPEN_MS, MARTIN_SYNC_MIN_MS };
+module.exports = { createTimedTracker, relativePrice, pickReference, findReference, decide, tickMomentum, EARLY_CANDLE_MS, PRICE_LOST_MS, NO_SIGNAL_MS, AI_STREAK_BRAKE, ENTRY_SEEN_LAG_MS, EXTERNAL_WAIT_MS, SYNC_LEAD_MS, SYNC_LATE_MS, SYNC_OPEN_MS, MARTIN_SYNC_MIN_MS, CLOCK_WAIT_MS };

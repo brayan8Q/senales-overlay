@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createTimedTracker, MARTIN_SYNC_MIN_MS } = require('../src/timed');
+const { createTimedTracker, MARTIN_SYNC_MIN_MS, CLOCK_WAIT_MS } = require('../src/timed');
 const { candleSeen, candleChange, askMoment } = require('../src/lastcandle');
 const { chain } = require('./helpers');
 
@@ -219,4 +219,56 @@ test('sin reloj de la vela la martingala analizada sigue como antes: se analiza 
   assert.equal(s.remainingMs, 2500);
   s = read(110, 5500);
   assert.equal(s.signal.source, 'martingala');
+});
+
+// ---------- Sin reloj de la vela no se predice ----------
+test('sin reloj exacto no sale señal a media vela: se espera a tenerlo y sale al abrir la vela', () => {
+  const t = createTimedTracker();
+  let known = false;
+  const read = (now, price = 112) =>
+    t.update({ candles: UP, priceY: row(price), now, cycleMs: 3000, pauseMs: 5000, payout: 92, manual: false, newCandle: true, waitClock: true, candle: known ? clock(now) : { known: false } });
+  let s = read(1000);
+  assert.equal(s.phase, 'waiting'); // antes: analizaba ya y predecía a los 6 s, a media vela
+  s = read(8000);
+  assert.equal(s.phase, 'waiting');
+  assert.equal(s.signal, null);
+  known = true; // vuelve el reloj
+  s = read(PERIOD + 9600);
+  assert.equal(s.phase, 'analysis');
+  read(2 * PERIOD - 300);
+  s = read(2 * PERIOD + 200);
+  assert.equal(s.phase, 'signal');
+});
+
+test('sin reloj exacto la martingala no sale a media vela: espera el reloj y entra al abrir la vela; si no vuelve, se suelta', () => {
+  const run = () => {
+    const t = createTimedTracker();
+    const state = { known: true };
+    const read = (now, price) =>
+      t.update({ candles: UP, priceY: row(price), now, cycleMs: 3000, pauseMs: 5000, payout: 92, manual: false, newCandle: true, waitClock: true, martin: 1, martinThinkMs: 2500, candle: state.known ? clock(now) : { known: false } });
+    read(PERIOD - 5500, 112);
+    read(14500, 112);
+    read(15000, 112);
+    state.known = false; // se pierde el reloj con la operación abierta
+    const lost = read(18000, 110);
+    assert.equal(lost.lastResult, 'falló');
+    assert.equal(lost.thinking, 1);
+    assert.equal(lost.signal, null);
+    return { read, state };
+  };
+  let { read, state } = run();
+  let s = read(22000, 110);
+  assert.equal(s.signal, null); // nada a media vela
+  state.known = true;
+  s = read(24000, 110);
+  assert.equal(s.thinking, 1);
+  assert.equal(s.remainingMs, 6000);
+  s = read(30000, 110);
+  assert.equal(s.signal.source, 'martingala');
+
+  ({ read, state } = run());
+  s = read(18000 + CLOCK_WAIT_MS, 110);
+  assert.equal(s.signal, null);
+  assert.equal(s.thinking, 0);
+  assert.match(s.lastResult, /^martingala suelta/);
 });
