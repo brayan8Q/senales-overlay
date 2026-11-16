@@ -1555,7 +1555,7 @@ async function scanTick() {
         pauseMs: instantMode() ? 0 : config.pauseSeconds * 1000,
         payout: payoutNow().value,
         advice,
-        force: config.alwaysSignal,
+        force: config.alwaysSignal || config.manual, // con el boton cada pulsacion da su lado (ARRIBA o ABAJO)
         // Automatico con el bot abierto: si la grafica del par no esta confirmada (fuente interna
         // inactiva) no se predice a ciegas ni se gasta en consultas: se espera, como en manual.
         manual: config.manual || autoHold(),
