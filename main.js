@@ -379,6 +379,10 @@ let quitting = false;
 let feedMap = null; // recta precio -> pantalla y geometria de las velas: { A, B, at, shift, pitch, geometry }
 let feedPeriod = 0; // duracion (s) de las velas de la grafica, confirmada por el ajuste
 let feedMisses = 0;
+// La fuente interna no se suelta por un momento sin cuadrar (la marca y el sombreado de una operacion
+// recien abierta deforman la grafica unos segundos): solo si lleva este tiempo seguido sin cuadrar.
+const FEED_DROP_AFTER_MS = 12000;
+let feedMissSince = 0; // desde cuando no cuadra (0 = cuadra)
 let feedLastBucket = null; // hora de la vela en curso de la fuente en la lectura anterior
 let blindReads = 0; // lecturas seguidas con la fuente interna activa y la grafica sin verse bien
 const BLIND_READS_TO_WARN = 4;
@@ -446,6 +450,7 @@ function internalView(now, candles, pixelsOk) {
       const steps = xs.slice(1).map((x, i) => x - xs[i]).sort((a, b) => a - b);
       feedPeriod = best.snap.period;
       feedMisses = 0;
+      feedMissSince = 0;
       feedMap = {
         A: best.fit.A,
         B: best.fit.B,
@@ -457,7 +462,8 @@ function internalView(now, candles, pixelsOk) {
       snap = best.snap;
       fitted = true;
     } else if (gross || !feedMap) {
-      if (++feedMisses >= FEED_MISSES_TO_DROP) {
+      if (!feedMissSince) feedMissSince = now;
+      if (++feedMisses >= FEED_MISSES_TO_DROP && (!feedMap || now - feedMissSince >= FEED_DROP_AFTER_MS)) {
         feedMap = null;
         feedPeriod = 0; // se vuelve a buscar la duracion: quiza cambio la temporalidad o el par
       }
@@ -689,7 +695,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15m la fuente interna (y con ella el reloj de la vela) ya no se suelta al abrir una operacion: solo tras 12 s sin cuadrar · 2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -977,7 +983,11 @@ function horizonSeconds() {
 function askCouncil(candles, moves, ticks, windowMs, readings = null, timing = null) {
   council.answers = {};
   const ids = enabledAis().filter((id) => !ais[id].busy);
-  if (ids.length === 0 || candles.length < MIN_CANDLES) return;
+  if (ids.length === 0 || candles.length < MIN_CANDLES) {
+    // E,ms,ia-sin-preguntar,motivo: la consulta no llego a salir.
+    record(`E,${Date.now()},ia-sin-preguntar,${ids.length === 0 ? `ocupadas: ${enabledAis().filter((id) => ais[id].busy).join(' ') || 'ninguna activa'}` : `pocas velas: ${candles.length}`}`);
+    return;
+  }
   // (Con `timing` la ventana ya esta medida contra el momento en que sale la senal: no aplica el
   // minimo de la pausa. Sin esto, la martingala analizada de la version j nunca llego a preguntar:
   // su ventana de 2.5 s quedaba por debajo del minimo de 3 s.)
@@ -1040,6 +1050,8 @@ function askCouncil(candles, moves, ticks, windowMs, readings = null, timing = n
     }
     askOne(id, personal, windowMs - 400, requestId);
   }
+  // E,ms,ia-pregunta,a quienes,plazo en ms
+  record(`E,${Date.now()},ia-pregunta,${ids.join(' ')},${Math.round(windowMs - 400)}`);
 }
 
 const emptyResult = () => ({

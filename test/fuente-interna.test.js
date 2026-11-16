@@ -409,7 +409,11 @@ test('si la fuente interna deja de actualizar más de 5 s, vuelve sola a los pí
 
 test('si lo que llega no cuadra con la gráfica de la pantalla, la fuente interna no se usa', async () => {
   let s = null;
+  // Unos segundos sin cuadrar no la sueltan (la marca de una operación recién abierta deforma la gráfica).
   for (let i = 0; i < 10; i++) ({ s } = await read({ mirror: true })); // en pantalla hay OTRA gráfica
+  assert.equal(s.source.active, 'INTERNA');
+  assert.equal(s.clockKnown, true);
+  for (let i = 0; i < 34; i++) ({ s } = await read({ mirror: true })); // ya son más de 12 s
   assert.equal(s.source.active, 'PÍXELES');
   assert.equal(s.source.code, 'no-cuadra');
   assert.match(s.source.detail, /no coincide con la gráfica de la pantalla: si cambiaste de par/);
@@ -639,7 +643,7 @@ test('bot en DEMO: si rechaza la orden, el panel espera tu entrada a mano; y sin
 
   // Sin la fuente interna activa (aquí: en pantalla hay otra gráfica) el bot no opera.
   let s = null;
-  for (let i = 0; i < 10; i++) ({ s } = await read({ mirror: true }));
+  for (let i = 0; i < 45; i++) ({ s } = await read({ mirror: true }));
   assert.equal(s.source.active, 'PÍXELES');
   assert.match(s.bot.pause, /no confirmo que la gráfica sea de ese par/);
   fakeBot.orders.length = 0;
@@ -741,7 +745,7 @@ test('automático con el bot: predice y opera solo; sin la gráfica confirmada s
   }
   for (let i = 0; i < 4; i++) ({ s } = await read());
   // En pantalla aparece OTRA gráfica: el automático se queda en espera (no predice a ciegas ni manda órdenes).
-  for (let i = 0; i < 12; i++) ({ s } = await read({ mirror: true }));
+  for (let i = 0; i < 45; i++) ({ s } = await read({ mirror: true }));
   assert.equal(s.source.active, 'PÍXELES');
   assert.equal(s.bot.hold, true);
   const sent = fakeBot.orders.length;
