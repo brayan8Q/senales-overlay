@@ -527,6 +527,9 @@ function createTimedTracker() {
       externalResult = null,
       lastCandle = null,
       waitClock = false, // sin reloj de la vela no se predice (ver CLOCK_WAIT_MS)
+      // Con el bot: la senal (y la martingala) sale este tiempo ANTES de que abra la vela, para que la
+      // orden llegue a Pocket justo al abrir (el bot espera al segundo entero). 0 = al abrir.
+      openLeadMs = 0,
     }) {
       const completed = candles.slice(0, -1);
       const aligned = Boolean(align) && manual; // solo con el boton PREDECIR
@@ -766,7 +769,7 @@ function createTimedTracker() {
         const waited = now - nextMartin.since;
         const mark = status === 'ok' ? markNow(priceY, completed, quote) : null;
         if (synced) {
-          if (now < nextMartin.openAt) thinking = true;
+          if (now < nextMartin.openAt - openLeadMs) thinking = true;
           else if (!mark) {
             // Abrio la vela pero no se puede leer en este instante: se reintenta un momento.
             if (now < nextMartin.openAt + 1500) thinking = true;
@@ -845,7 +848,9 @@ function createTimedTracker() {
       //     curso le falte lo que dura el analisis; ya analizado, a que abra la vela siguiente.
       let syncHold = false;
       if (newCandle && clockKnown && !hold && !pending && !watching && !nextMartin && status === 'ok' && (!manual || armed)) {
-        const justOpened = candle.elapsedMs !== null && candle.elapsedMs <= SYNC_OPEN_MS;
+        const justOpened =
+          (candle.elapsedMs !== null && candle.elapsedMs <= SYNC_OPEN_MS) ||
+          (openLeadMs > 0 && observed && Number.isFinite(candle.remainingMs) && candle.remainingMs <= openLeadMs);
         if (!observed) {
           // El analisis solo arranca en su ventana: cuando a la vela le falta justo lo que dura.
           const inWindow = candle.remainingMs <= pauseMs + SYNC_LEAD_MS && candle.remainingMs >= pauseMs - SYNC_LATE_MS;

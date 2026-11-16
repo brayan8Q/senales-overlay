@@ -78,11 +78,20 @@ function nivelDe(grupo, cerradas, precio, tipica) {
 }
 
 /** El mas cercano; o, hasta una vela tipica mas lejos, uno con mas toques o vigente en vez de invertido. */
-function elegir(lista, precio, tipica) {
+function elegir(lista, precio, tipica, previo = null) {
   if (lista.length === 0) return null;
   const distancia = (l) => Math.abs(l.precio - precio);
   const orden = [...lista].sort((a, b) => distancia(a) - distancia(b));
   const cercano = orden[0];
+  // NIVEL FIRME (15 nov 2026): el nivel que ya estaba dibujado se conserva mientras siga siendo valido
+  // (no cruzado dos veces, no pegado al precio, del mismo lado), salvo que haya otro mas de una vela
+  // tipica mas cerca. Asi la linea no brinca entre dos niveles parecidos a cada lectura.
+  if (previo && Number.isFinite(previo.precio)) {
+    const mismo = lista.find((l) => Math.abs(l.precio - previo.precio) < tipica * AGRUPAR);
+    if (mismo && distancia(mismo) - distancia(cercano) <= tipica * PREFERIR_HASTA) {
+      return { precio: mismo.precio, toques: mismo.toques, invertido: mismo.invertido };
+    }
+  }
   const mejores = orden
     .slice(1)
     .filter((l) => distancia(l) - distancia(cercano) <= tipica * PREFERIR_HASTA)
@@ -98,7 +107,7 @@ function elegir(lista, precio, tipica) {
  * @returns {{ estado: 'ok'|'sin nivel', soporte: {precio:number, toques:number, invertido:boolean}|null,
  *             resistencia: {precio:number, toques:number, invertido:boolean}|null, tipica: number }}
  */
-function niveles(velas, precio) {
+function niveles(velas, precio, previo = null) {
   const nada = { estado: SIN_NIVEL, soporte: null, resistencia: null, tipica: 0 };
   if (!Array.isArray(velas) || velas.length < 2 || !Number.isFinite(precio)) return nada;
   const enCurso = velas[velas.length - 1];
@@ -120,8 +129,8 @@ function niveles(velas, precio) {
     .filter((l) => Math.abs(l.precio - precio) >= tipica * MUY_CERCA); // pegado al precio: no dice nada
   return {
     estado: 'ok',
-    soporte: elegir(validos.filter((l) => l.precio < precio), precio, tipica),
-    resistencia: elegir(validos.filter((l) => l.precio > precio), precio, tipica),
+    soporte: elegir(validos.filter((l) => l.precio < precio), precio, tipica, previo ? previo.soporte : null),
+    resistencia: elegir(validos.filter((l) => l.precio > precio), precio, tipica, previo ? previo.resistencia : null),
     tipica,
   };
 }

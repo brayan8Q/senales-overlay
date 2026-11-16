@@ -272,3 +272,29 @@ test('sin reloj exacto la martingala no sale a media vela: espera el reloj y ent
   assert.equal(s.thinking, 0);
   assert.match(s.lastResult, /^martingala suelta/);
 });
+
+// ---------- Con el bot la orden sale un instante antes de abrir la vela ----------
+test('con el bot: la señal sale 150 ms antes de que abra la vela (para que la operación abra justo al empezar)', () => {
+  const t = createTimedTracker();
+  const read = (now) => t.update({ candles: UP, priceY: row(112), now, cycleMs: 3000, pauseMs: 5000, payout: 92, manual: false, newCandle: true, openLeadMs: 150, candle: clock(now) });
+  read(PERIOD - 5500);
+  let s = read(14500);
+  assert.equal(s.phase, 'waiting');
+  s = read(14800); // faltan 200 ms: todavía no
+  assert.equal(s.phase, 'waiting');
+  s = read(14860); // faltan 140 ms: sale
+  assert.equal(s.phase, 'signal');
+  // Y no se repite en la misma vela: la siguiente espera su ventana.
+  s = read(18000);
+  assert.notEqual(s.phase, 'signal');
+});
+
+test('con el bot: la martingala también sale 150 ms antes de la apertura', () => {
+  const { read } = auto();
+  read(18000, 110);
+  const extra = { openLeadMs: 150 };
+  let s = read(29800, 110, extra);
+  assert.equal(s.phase, 'analysis');
+  s = read(29860, 110, extra);
+  assert.equal(s.signal.source, 'martingala');
+});

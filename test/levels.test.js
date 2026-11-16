@@ -148,3 +148,18 @@ test('solo mira las ultimas 80 velas cerradas y no falla con datos raros', () =>
   const planas = Array.from({ length: 12 }, () => ({ open: 100, high: 100, low: 100, close: 100 }));
   assert.equal(niveles(planas, 100).estado, 'sin nivel');
 });
+
+// ---------- Nivel firme (15 nov 2026): el nivel dibujado no brinca a otro parecido ----------
+const DOS_PISOS = [...BASE, [118, 128, 120], [110, 120, 118], [116, 126, 124], [120, 130, 126], [122, 132, 128]]; // pisos en 100 y en 110
+
+test('nivel firme: el soporte que ya estaba dibujado se conserva mientras siga siendo valido', () => {
+  const lista = velas(DOS_PISOS, [122, 132, 127]);
+  // Sin memoria se elige el mas cercano.
+  assert.equal(niveles(lista, 127).soporte.precio, 110);
+  // Si el dibujado era el de 100 (a una vela tipica mas), se queda: no brinca al de 110.
+  assert.deepEqual(niveles(lista, 127, { soporte: { precio: 100 }, resistencia: null }).soporte, { precio: 100, toques: 1, invertido: false });
+  // Si el dibujado ya no existe entre los validos, se elige de nuevo.
+  assert.equal(niveles(lista, 127, { soporte: { precio: 60 }, resistencia: null }).soporte.precio, 110);
+  // La resistencia no se ve afectada por la memoria del soporte.
+  assert.equal(niveles(lista, 127, { soporte: { precio: 100 }, resistencia: null }).resistencia.precio, 150);
+});

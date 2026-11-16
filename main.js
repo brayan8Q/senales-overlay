@@ -266,10 +266,19 @@ const tallyKey = (key) => (key === 'win' ? 'wins' : key === 'loss' ? 'losses' : 
 const resultKey = (text) => (/^acert/.test(text) ? 'win' : /^fall/.test(text) ? 'loss' : /^empate/.test(text) ? 'tie' : null);
 // Pago que muestra la terminal demo para el par (fuente interna): { value, at, symbol }.
 let visorPayout = null;
+let botPaid = null; // pago de la ultima operacion que abrio el bot: { value, at }
+const BOT_PAID_MS = 180000; // cuanto vale ese pago como «pago de ahora»
+// Con el bot, la orden sale este tiempo antes de que abra la vela: el bot la detiene hasta el segundo
+// entero (su LATE = 0.80), asi la operacion abre al empezar la vela y no 0.6 a 1 s despues.
+const OPEN_LEAD_MS = 150;
+let levelMemo = null; // precio real del soporte y la resistencia dibujados (para que no brinquen)
 let internalSeenAt = 0; // ultima vez que la fuente interna cuadro con la grafica de la pantalla
 /** Pago de este momento: el de la fuente interna si se conoce y es del mismo par; si no, el escrito en el panel. */
 function payoutNow() {
   const now = Date.now();
+  // PAGO REAL (15 nov 2026, noche): lo que de verdad pago Pocket en la ultima operacion del bot, si es
+  // reciente. (Ese dia la cuenta bajo a 76 % mientras la terminal demo seguia diciendo 92 %.)
+  if (botPaid && config.autoTrade && bot.status().online && now - botPaid.at <= BOT_PAID_MS && botPaid.value > 0) return { value: botPaid.value, source: 'bot' };
   const fresh = visorPayout && now - visorPayout.at <= 15000;
   // Solo si la fuente interna cuadro con la grafica de la pantalla hace poco: si en la pantalla
   // hay otro par, el pago de la terminal demo es de otro activo y no se usa.
@@ -697,7 +706,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-15o sin el reloj exacto de la vela no se predice (ni senal ni martingala a media vela) · 2026-11-15n la IA vuelve a contestar en las senales normales (plazo entero) y se le pregunta en el segundo 11.5 · 2026-11-15m la fuente interna (y con ella el reloj de la vela) ya no se suelta al abrir una operacion: solo tras 12 s sin cuadrar · 2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-15p pago real del bot · la orden sale 150 ms antes de abrir la vela (entrada pegada a la apertura) · soporte y resistencia firmes · 2026-11-15o sin el reloj exacto de la vela no se predice (ni senal ni martingala a media vela) · 2026-11-15n la IA vuelve a contestar en las senales normales (plazo entero) y se le pregunta en el segundo 11.5 · 2026-11-15m la fuente interna (y con ella el reloj de la vela) ya no se suelta al abrir una operacion: solo tras 12 s sin cuadrar · 2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -797,6 +806,7 @@ function sendToBot(signal, now) {
       order.id = opened.id;
       order.openPrice = opened.open_price;
       order.payout = opened.payout;
+      if (Number(opened.payout) > 0) botPaid = { value: Number(opened.payout), at: Date.now() };
       order.amount = opened.amount;
       // La orden entro entre que se mando y que Pocket la confirmo: se toma el punto medio.
       order.enteredAt = Math.round((opened.sent_ms + opened.open_ms) / 2);
@@ -1412,7 +1422,23 @@ async function scanTick() {
         // Soporte y resistencia: ultimas 80 velas cerradas + la vela en curso + el precio de ahora.
         // Lo que sale de aqui es lo que se dibuja y lo que se les manda a las IA.
         const levelCandles = inner ? inner.closed : levelHistory.update(candles, priceY, now, 1000).candles;
-        levels = forming ? niveles([...levelCandles, forming], priceY !== null ? -priceY : forming.close) : null;
+        // Nivel firme: con la fuente interna se recuerda el PRECIO real de los niveles dibujados (la
+        // escala de la pantalla cambia) y se conservan mientras sigan siendo validos.
+        const keep =
+          inner && levelMemo
+            ? {
+                soporte: levelMemo.soporte !== null ? { precio: -inner.axis.rowOf(levelMemo.soporte) } : null,
+                resistencia: levelMemo.resistencia !== null ? { precio: -inner.axis.rowOf(levelMemo.resistencia) } : null,
+              }
+            : null;
+        levels = forming ? niveles([...levelCandles, forming], priceY !== null ? -priceY : forming.close, keep) : null;
+        levelMemo =
+          inner && levels
+            ? {
+                soporte: levels.soporte ? inner.axis.at(-levels.soporte.precio) : null,
+                resistencia: levels.resistencia ? inner.axis.at(-levels.resistencia.precio) : null,
+              }
+            : null;
       }
       // Reloj de la vela en curso. Con la fuente interna es exacto (la hora del servidor). Por
       // pixeles se pone en hora al ver cerrar una vela; si a la hora del cierre la grafica estaba
@@ -1496,6 +1522,7 @@ async function scanTick() {
         // Con la senal al abrir la vela y la fuente interna encendida, el unico reloj que vale es
         // el exacto (el de la fuente interna): con el de pixeles, o sin reloj, no se predice.
         waitClock: Boolean(config.newCandle && config.internalSource),
+        openLeadMs: config.autoTrade && !botPause() ? OPEN_LEAD_MS : 0,
         candle: {
           ...clockInfo,
           known: Boolean(clockInfo && clockInfo.known && (inner || !(config.newCandle && config.internalSource))),
