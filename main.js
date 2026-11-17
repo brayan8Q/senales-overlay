@@ -124,7 +124,7 @@ const config = {
   // martingala se busca entre todos. Con esto encendido, las senales de la grafica de la pantalla no se operan.
   multi: false,
   multiPairs: ['USD/BRL OTC', 'QAR/CNY OTC', 'USD/PKR OTC', 'GBP/JPY OTC'],
-  multiMinMargin: 2, // lecturas de ventaja que se piden para entrar
+  multiMinMargin: 5, // lecturas de ventaja que se piden para entrar (5 = confianza muy alta; el usuario la pidio asi el 16 nov 2026)
   multiMinPayout: 90, // un par que paga menos no se opera (con 80 % hay que acertar 55.6 %; con 92 %, 52.1 %)
   multiAuto: true, // los pares se cambian solos cuando dejan de pagar el minimo (ver src/autopairs.js)
   multiWall: false, // la ventana «Lector · 4 gráficas» que dibuja el panel (apagada: el usuario prefiere las graficas de Pocket con sus marcos y que el sistema le diga que par poner)

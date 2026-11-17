@@ -6,6 +6,19 @@ Estado al 16 de noviembre de 2026, 21:15. Todo es **cuenta DEMO**. Rama: `princi
 
 **Las gráficas son las de Pocket Option.** El sistema escoge el par de cada una de las 4 gráficas y **dice cuál poner**; quien maneja la pantalla (el dueño, o Muse) cambia la gráfica en Pocket y la deja en **S15** y **M10**. El bot opera solo sobre esos pares.
 
+### Cuándo entra el bot: confianza muy alta
+
+El bot solo entra cuando se cumplen las cuatro condiciones a la vez:
+
+1. **5 o más lecturas de ventaja** y ninguna en contra (de 8: tendencia, EMA, momentum, RSI, nivel, agotamiento, MACD, temporalidad mayor).
+2. **Solo a favor del movimiento:** jugadas de tipo «tendencia» o «rompimiento».
+3. **La vela en curso lleva de 5 a 11 segundos abierta.** No entra con la vela recién abierta ni cuando ya va a cerrar.
+4. **La vela en curso es del color de la entrada:** verde para ARRIBA, roja para ABAJO.
+
+Además: **$1 fijo, sin martingala**, una operación a la vez con 2 segundos entre una y otra, y un par donde acaba de perder descansa 45 segundos (2 minutos si pierde dos seguidas ahí). Sobre cada gráfica el letrero dice por qué no entra («NO ENTRO: …») o «CONFIANZA MUY ALTA: entro».
+
+Estos ajustes están en [`config-ejemplo.json`](config-ejemplo.json). En un equipo nuevo hay que copiarlo como `config.json` en la carpeta de datos del panel (`%APPDATA%\senales-overlay`) con el panel cerrado; sin eso el panel arranca con el botón PREDECIR, una sola gráfica y martingala.
+
 Este documento tiene dos partes:
 
 - **Parte A — lo que hay que hacer en la pantalla**: mantener las 4 gráficas de Pocket en los pares que el sistema pide, en velas **S15** y vista **M10**. Esto es lo que hace Muse.
