@@ -66,6 +66,12 @@ Así se ven las gráficas con la vista en **M10** (abajo a la izquierda de cada 
 
 Es el menú de abajo a la izquierda de cada gráfica. Aquí se escoge **M10**. Ojo: este menú no cambia el tamaño de la vela; eso va en el menú de tipo de gráfica (ver A3).
 
+### 4b. El menú donde se escoge S15
+
+![Menú de tipo de gráfica con velas y S15](fotos/06_menu_tipo_de_grafica_velas_S15.jpg)
+
+Se abre con el botón de velas que está junto al nombre del par. Arriba, «Chart types»: escoger **Candles** (la segunda). En medio, «Time frames»: escoger **S15** (la tercera de la primera fila: S5, S10, **S15**, S30, M1…). La imagen está ampliada y se ve borrosa; sirve para ubicar dónde queda cada cosa.
+
 ### 5. La ventana «Lector · 4 gráficas» (apagada; no es la que se usa)
 
 ![Ventana Lector 4 gráficas](fotos/04_ventana_lector_4_graficas.jpg)
