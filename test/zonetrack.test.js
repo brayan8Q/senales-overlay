@@ -98,3 +98,20 @@ test('con la grafica en M10 (velas de 30 s) tambien se sigue la vela actual', ()
   assert.ok(Math.abs(out.current.open - (A + B * big.forming.open)) < 0.5);
   assert.ok(Math.abs(out.current.close - (A + B * small[40].close)) < 0.5);
 });
+
+test('si la ultima vela cerrada es un doji que la pantalla no detecta, el recuadro sigue en la vela actual', () => {
+  // la pantalla ve todas menos la ultima cerrada (indice 18); la vela en curso (19) si se ve
+  const gap = screenAll.filter((_, i) => i !== 18);
+  const out = trackZone({ candles: gap, book, now: 100000 });
+  assert.ok(out.exact && out.current);
+  assert.strictEqual(out.current.x0, screenAll[19].x0);
+  assert.strictEqual(out.current.seen, true);
+});
+
+test('un globo del mismo color encima de la casilla no se toma por la vela: se dibuja con los precios del bot', () => {
+  const fake = { ...screenAll[19], high: screenAll[19].high + 90, low: screenAll[19].low - 60, open: screenAll[19].low - 55, close: screenAll[19].high + 85 };
+  const out = trackZone({ candles: [...screenNoForming, fake], book, now: 100000 });
+  assert.ok(out.current);
+  assert.strictEqual(out.current.seen, false);
+  assert.ok(Math.abs(out.current.close - (A + B * forming.close)) < 0.5);
+});

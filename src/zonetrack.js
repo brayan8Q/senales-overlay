@@ -96,12 +96,16 @@ function trackZone({ candles, book, prev = null, now }) {
   let lead = 0;
   let forming = book.forming;
   if (fit) {
-    // Cual de las vistas es la ultima cerrada del bot: con shift 0 la penultima, con +1 la ultima, con −1 la antepenultima.
-    const anchor = seen[seen.length - 2 + fit.shift];
+    // El ajuste casa una vela VISTA con una cerrada del bot; de ahi se cuentan casillas hasta la vela en curso:
+    //   shift 0  → la penultima vista es la ultima cerrada del bot: la actual va 1 casilla despues;
+    //   shift +1 → la penultima vista es la ANTERIOR a la ultima cerrada: 2 casillas despues (sirve igual si la
+    //              ultima cerrada no se ve por ser un doji, o si la que no se ve es la vela en curso; idea de Argon);
+    //   shift −1 → la pantalla va una vela adelante del bot: la antepenultima vista es su ultima cerrada, 2 casillas.
+    const anchor = seen[seen.length - (fit.shift === -1 ? 3 : 2)];
     if (anchor) {
       const width = median(seen.slice(-12).map((c) => c.x1 - c.x0));
       // La casilla que sigue a la ultima cerrada (dos mas alla si la pantalla ya va una vela adelante del bot).
-      const steps = fit.shift === -1 ? 2 : 1;
+      const steps = fit.shift === 0 ? 1 : 2;
       slot = { x0: anchor.x0 + pitch * steps, x1: anchor.x0 + pitch * steps + width };
       map = { A: fit.A, B: fit.B };
       seconds = used.seconds || 15;
@@ -124,8 +128,13 @@ function trackZone({ candles, book, prev = null, now }) {
 
   // Lo que la pantalla ve en esa casilla (si ve algo): con eso el recuadro coincide al pixel con la vela.
   const here = seen.filter((c) => Math.abs(c.x0 - slot.x0) <= SNAP_PX || (c.x0 >= slot.x0 - SNAP_PX && c.x1 <= slot.x1 + SNAP_PX));
-  const visible = here.length ? here[here.length - 1] : null;
   const at = (price) => map.A + map.B * price;
+  // Un globo de resultado del mismo color encima de la casilla no es la vela (Argon): si lo visto se sale mucho de
+  // lo que el bot dice que ha recorrido la vela, se dibuja con los precios del bot.
+  const slack = Math.max(8, (fit ? fit.tolerance : 2) * 3);
+  const plausible = (c) => c.high <= at(forming.high) + slack && c.low >= at(forming.low) - slack;
+  const fits = here.filter(plausible);
+  const visible = fits.length ? fits[fits.length - 1] : null;
   const current = visible
     ? { x0: visible.x0, x1: visible.x1, open: visible.open, close: visible.close, high: visible.high, low: visible.low, up: visible.dir !== 'down', seen: true }
     : { x0: slot.x0, x1: slot.x1, open: at(forming.open), close: at(forming.close), high: at(forming.high), low: at(forming.low), up: forming.close >= forming.open, seen: false };
