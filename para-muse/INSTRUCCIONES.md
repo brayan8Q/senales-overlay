@@ -37,7 +37,28 @@ Este documento tiene dos partes:
 
 ## Cómo se ve (fotos)
 
-Las fotos están en la carpeta [`fotos/`](fotos). Son recortes de la pantalla del dueño: se quitaron las pestañas del navegador, el saldo y la foto de perfil.
+Las fotos están en la carpeta [`fotos/`](fotos). Son de la pantalla del dueño; solo se taparon en negro las pestañas del navegador y el saldo.
+
+### Así se ve todo junto, funcionando
+
+![Pantalla completa: Pocket con 4 gráficas, los marcos del escáner y el panel del bot](fotos/00_asi_se_ve_completo.jpg)
+
+Qué hay en la pantalla:
+
+- **Pocket Option con la vista de 4 gráficas** (el botón de cuatro cuadros, junto al logotipo, es el que la abre). Cada gráfica tiene su par arriba a la izquierda.
+- **Un marco punteado por gráfica**: es la zona que el panel escanea. Se marca una vez en ⚙ del panel («Marcar gráfica 1» a «Marcar gráfica 4»), arrastrando un recuadro sobre las velas de cada una.
+- **El escáner**: la franja azul clara que barre cada gráfica de izquierda a derecha, y los recuadros finos alrededor de cada vela que va leyendo.
+- **La vela actual**: recuadro amarillo con el letrero «vela actual» y los segundos que lleva.
+- **El letrero de cada gráfica**: número, par, hacia dónde apunta, cuántas lecturas de ventaja tiene y por qué entra o no entra.
+- **El panel LECTOR** (a la derecha): los 4 pares, el estado («ANALIZANDO» o el lado cuando entra) y el marcador de ganadas y perdidas.
+
+### Cuando el bot entra
+
+![El bot entró en la gráfica 4; lista de pares de Pocket abierta](fotos/07_el_bot_entro_y_lista_de_pares.jpg)
+
+- La gráfica 4 tiene el **marco amarillo** y dice `EL BOT ENTRÓ ▼ $1.00`; el panel dice **ABAJO** en grande.
+- La gráfica 3 dice «ahora paga 44 %: aquí no entro»: hay que cambiarla.
+- En el centro está abierta la **lista de pares de Pocket** (se abre con un clic en el nombre del par): ahí se escoge el par nuevo. A la derecha de cada par se ve cuánto paga.
 
 ### 1. Pocket con las 4 gráficas y sus marcos — así debe quedar
 
