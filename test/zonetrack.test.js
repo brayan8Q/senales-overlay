@@ -65,3 +65,26 @@ test('sin velas del bot se usa la mas a la derecha (como antes)', () => {
   assert.strictEqual(out.exact, false);
   assert.strictEqual(out.current.x0, screenAll[19].x0);
 });
+
+test('con la grafica en M10 (velas de 30 s) tambien se sigue la vela actual', () => {
+  const { widerBooks } = require('../src/zonetrack');
+  // 41 velas de 15 s; la pantalla las pinta de 2 en 2. La vela de 30 s en curso lleva una de 15 s cerrada y la que va.
+  const small = [];
+  let q = 100200;
+  for (let i = 0; i < 41; i++) {
+    const open = q;
+    const close = q + (i % 3 === 0 ? -35 : 28) + (i % 5) * 3;
+    small.push({ open, close, high: Math.max(open, close) + 9 + (i % 4), low: Math.min(open, close) - 7 - (i % 3) });
+    q = close;
+  }
+  const book30 = { closed: small.slice(0, 40), forming: small[40], openFor: 4 };
+  const big = widerBooks(book30, 2)[1]; // lead 1: la de 30 s en curso = la ultima cerrada de 15 s + la que va
+  assert.strictEqual(big.seconds, 30);
+  const screen = [...big.closed, big.forming].map(toPx);
+  const out = trackZone({ candles: screen, book: book30, now: 100000 });
+  assert.ok(out.exact && out.current, 'se ubica aunque la pantalla pinte velas de 30 s');
+  assert.strictEqual(out.seconds, 30);
+  assert.strictEqual(out.current.x0, screen[screen.length - 1].x0);
+  assert.ok(Math.abs(out.current.open - (A + B * big.forming.open)) < 0.5);
+  assert.ok(Math.abs(out.current.close - (A + B * small[40].close)) < 0.5);
+});

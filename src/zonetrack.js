@@ -25,6 +25,24 @@ const median = (values) => {
   return sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : 0;
 };
 
+const merge = (list) => ({ open: list[0].open, close: list[list.length - 1].close, high: Math.max(...list.map((c) => c.high)), low: Math.min(...list.map((c) => c.low)) });
+/**
+ * Las velas del bot (15 s) juntadas de `size` en `size`, como las pinta la plataforma con mas tiempo a la vista
+ * (M10 = velas de 30 s). No se sabe en cual de las de 15 s empieza cada vela grande, asi que se dan todas las
+ * formas (`size` de ellas): `lead` = cuantas de 15 s ya cerradas forman parte de la vela grande en curso.
+ */
+function widerBooks(book, size) {
+  const out = [];
+  for (let lead = 0; lead < size; lead++) {
+    const done = lead ? book.closed.slice(0, -lead) : book.closed;
+    const forming = merge([...(lead ? book.closed.slice(-lead) : []), book.forming]);
+    const closed = [];
+    for (let end = done.length; end - size >= 0; end -= size) closed.unshift(merge(done.slice(end - size, end)));
+    if (closed.length >= 6) out.push({ closed, forming, openFor: book.openFor, seconds: 15 * size, lead });
+  }
+  return out;
+}
+
 /** Separacion entre velas (pixeles de la imagen), de las ultimas vistas. */
 function pitchOf(candles) {
   const steps = [];
@@ -48,8 +66,24 @@ function trackZone({ candles, book, prev = null, now }) {
     return { marks: seen.slice(0, -1), current: last ? { ...last, up: last.dir !== 'down' } : null, track: null, exact: false };
   }
   const pitch = pitchOf(seen);
-  let fit = fitPriceMap(seen, book);
-  if (!(fit && fit.valid) && seen.length > SHORT_FIT) fit = fitPriceMap(seen.slice(-SHORT_FIT), book);
+  const tryFit = (b) => {
+    let f = fitPriceMap(seen, b);
+    if (!(f && f.valid) && seen.length > SHORT_FIT) f = fitPriceMap(seen.slice(-SHORT_FIT), b);
+    return f && f.valid ? f : null;
+  };
+  let used = book;
+  let fit = tryFit(book);
+  // Las de 15 s no casan: la grafica puede estar pintando velas de 30 s o de 1 min.
+  for (const size of fit ? [] : [2, 4]) {
+    for (const alt of widerBooks(book, size)) {
+      const f = tryFit(alt);
+      if (f && (!fit || f.rms < fit.rms)) {
+        fit = f;
+        used = alt;
+      }
+    }
+    if (fit) break;
+  }
   // Cuando empezo la vela en curso (reloj local): para saber si sigue siendo la misma que en la lectura anterior.
   const startedAt = now - (Number(book.openFor) || 0) * 1000;
   const sameCandle = prev && Math.abs(prev.startedAt - startedAt) < 3000;
@@ -81,10 +115,13 @@ function trackZone({ candles, book, prev = null, now }) {
   if (!geo || !map) return { marks: seen.slice(0, -1), current: null, track: null, exact: false };
 
   const at = (price) => map.A + map.B * price;
-  const f = book.forming;
+  // (si esta lectura no caso, se dibuja con la misma forma de juntar velas que la ultima vez)
+  const seconds = fit ? used.seconds || 15 : (prev && prev.seconds) || 15;
+  const again = !fit && seconds !== 15 ? widerBooks(book, seconds / 15).find((b) => b.lead === ((prev && prev.lead) || 0)) || null : null;
+  const f = (fit ? used : again || book).forming;
   const current = { x0: geo.x0, x1: geo.x1, open: at(f.open), close: at(f.close), high: at(f.high), low: at(f.low), up: f.close >= f.open };
   const fitAt = fit && fit.valid ? now : prev.fitAt;
-  return { marks, current, track: { geo, map, pitch: pitch || (prev && prev.pitch) || 0, fitAt, startedAt }, exact: true };
+  return { marks, current, seconds, track: { geo, map, pitch: pitch || (prev && prev.pitch) || 0, fitAt, startedAt, seconds, lead: fit ? used.lead || 0 : (prev && prev.lead) || 0 }, exact: true };
 }
 
-module.exports = { trackZone, pitchOf, HOLD_MS };
+module.exports = { trackZone, pitchOf, widerBooks, HOLD_MS };

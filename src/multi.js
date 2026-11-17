@@ -99,7 +99,7 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
       const answer = await bot.candles(cfg.pairs);
       if (!answer || !answer.ok) throw new Error((answer && answer.error) || 'el bot no dio las velas');
       const time = new Date(now());
-      state.books = new Map(answer.pairs.map(([, name, , closed, forming, , openFor]) => [pairKey(name), { closed: closed.slice(-30).map(toCandle), forming: toCandle(forming), openFor, at: now() }]));
+      state.books = new Map(answer.pairs.map(([, name, , closed, forming, , openFor]) => [pairKey(name), { closed: closed.slice(-64).map(toCandle), forming: toCandle(forming), openFor, at: now() }]));
       state.reads = answer.pairs.map(([symbol, name, payout, closed, forming, age, openFor]) => ({
         symbol, name, payout, age, candles: closed.length, openFor, up: forming[3] >= forming[0], read: readPair({ closed, forming, time, asset: name }),
       }));

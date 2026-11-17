@@ -466,7 +466,7 @@ function renderZoneCandles(el, scan, pair) {
     if (scan && scan.misfit) {
       // Hay velas a la vista pero no son las de 15 s que lee el bot: se dice cómo arreglarlo.
       px(info, { left: el.clientWidth / 2, top: el.clientHeight / 2 });
-      info.textContent = 'Estas velas no son de 15 s (o es otro par): pon esta gráfica en M3';
+      info.textContent = 'Estas velas no casan con las del par escrito: revisa el par o pon la gráfica en M3 o M10';
     }
     return;
   }
@@ -478,7 +478,7 @@ function renderZoneCandles(el, scan, pair) {
   now.className = `mnow ${cur.up ? 'up' : 'down'}`;
   px(info, { left: center, top: Math.max(34, cur.high - 8) });
   const secs = pair && Number.isFinite(pair.openFor) ? ` · vela de 15 s del bot: va en ${Math.max(0, Math.min(15, Math.round(pair.openFor)))}` : '';
-  info.textContent = `vela actual: ${cur.up ? 'verde' : 'roja'}${secs}${scan.exact ? '' : ' · sin confirmar'}`;
+  info.textContent = `vela actual: ${cur.up ? 'verde' : 'roja'}${scan.seconds && scan.seconds !== 15 ? ` · aquí se ven velas de ${scan.seconds} s` : secs}${scan.exact ? '' : ' · sin confirmar'}`;
 }
 
 /** Varios pares a la vez: cada gráfica con su marco, su haz y un letrero con la lectura de su par. */
