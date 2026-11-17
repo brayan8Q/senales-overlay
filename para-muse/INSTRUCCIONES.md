@@ -6,6 +6,29 @@ Estado al 16 de noviembre de 2026, 21:15. Todo es **cuenta DEMO**. Rama: `princi
 
 **Las gráficas son las de Pocket Option.** El sistema escoge el par de cada una de las 4 gráficas y **dice cuál poner**; quien maneja la pantalla (el dueño, o Muse) cambia la gráfica en Pocket y la deja en **S15** y **M10**. El bot opera solo sobre esos pares.
 
+### Si Muse trabaja en su propio equipo (sin la contraseña del dueño)
+
+Hay dos formas de que el bot entre, y Muse puede usar la segunda sin pedirle nada al dueño:
+
+| | En el equipo del dueño | **En el equipo de Muse** |
+|---|---|---|
+| Con qué entra el bot | La cuenta DEMO del dueño (él inició sesión ahí) | **La demo pública de Pocket**, sin cuenta ni contraseña |
+| Cómo se conecta | `Conectar Pocket Option.bat` | **`Conectar demo publica (sin cuenta).bat`** (repositorio del bot) |
+| Las 4 gráficas | Las de Pocket, con los marcos del panel (Parte A) | Las que dibuja el panel: encender `multiWall` («Usar las 4 gráficas del panel»). La demo pública no tiene vista de 4 gráficas |
+| Cambio de pares | El sistema dice cuál poner y alguien cambia la gráfica en Pocket | **Solo:** el panel cambia el par y su gráfica |
+| Reglas de entrada | Las mismas | Las mismas (`config-ejemplo.json`, con `"multiWall": true`) |
+
+Pasos en el equipo de Muse:
+
+1. Instalar el bot (`brayan8Q/pocket-bot-lector`, ver su README) y este panel (`npm install`).
+2. `Conectar demo publica (sin cuenta).bat` y después `Iniciar Pocket Lector.bat`.
+3. Copiar `para-muse/config-ejemplo.json` como `config.json` en la carpeta de datos del panel, cambiando `"multiWall": false` por `"multiWall": true`.
+4. Abrir el panel (`npm start`). Debe decir «Bot DEMO · operando 4 pares a la vez» y abrir la ventana «Lector · 4 gráficas».
+
+La conexión con la demo pública es nueva (16 nov) y **no se pudo probar contra Pocket** esa noche; el README del bot dice qué revisar si no conecta. Las operaciones que haga el bot de Muse **no aparecen en la cuenta del dueño**: son de la demo pública.
+
+Si en cambio se quiere operar la DEMO del dueño desde el equipo de Muse, el dueño tiene que iniciar sesión él mismo en ese equipo, una vez. La contraseña no se manda por chat.
+
 ### Cuándo entra el bot: confianza muy alta
 
 El bot solo entra cuando se cumplen las cuatro condiciones a la vez:
