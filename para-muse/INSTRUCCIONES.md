@@ -284,7 +284,7 @@ Ajustes (en `config.json` de la carpeta de datos del panel): `multi`, `multiPair
 
 Registro del día (líneas `Q`): `lectura`, `entrada`, `abierta`, `resultado`, `serie`, `par` (con `auto` cuando el cambio fue automático), `reinicio`, `graficas`.
 
-**El bot** es un proceso aparte y su código **no está en este repositorio**: está en `brayan8Q/pocket-bot-lector` (repositorio privado; ahí viene su propio README con cómo instalarlo, iniciar sesión y arrancarlo). Sin el bot abierto, el panel solo lee la pantalla y no opera.
+**El bot** es un proceso aparte y su código **no está en este repositorio**: está en `brayan8Q/pocket-bot-lector` (https://github.com/brayan8Q/pocket-bot-lector; ahí viene su propio README con cómo instalarlo, iniciar sesión y arrancarlo). Sin el bot abierto, el panel solo lee la pantalla y no opera.
 
 El bot atiende en `127.0.0.1` con una clave que deja en su carpeta de datos:
 
