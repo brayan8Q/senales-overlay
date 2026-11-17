@@ -915,7 +915,7 @@ function restoreMultiTally() {
         tally.net += Number(p[4]) || 0;
       } else if (p[2] === 'serie') {
         tally.series++;
-        if (p[3] === 'perdida') tally.lost++;
+        if (p[3] === 'perdida' && config.martinLevels > 0) tally.lost++; // sin martingala una perdida no es una serie perdida
       }
     }
     multi.restore(tally);
