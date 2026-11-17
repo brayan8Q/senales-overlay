@@ -172,3 +172,19 @@ test('no se aferra: tras perder en un par, ese par descansa aunque tenga la mejo
   await engine.tick(); // ya descanso: vuelve a entrar
   assert.strictEqual(orders.length >= 3, true);
 });
+
+test('confianza muy alta: no entra con la vela recien abierta, ni contra su color, ni en jugadas que no son de tendencia', () => {
+  const { blockReason } = require('../src/multi');
+  const base = { name: 'A', payout: 92, age: 0.4, openFor: 7, color: 'up', read: { dir: 'up', margin: 5, ups: 5, downs: 0, pattern: 'tendencia' } };
+  const rules = { minMargin: 5, minPayout: 90, only: ['tendencia', 'rompimiento'], minAge: 5, maxAge: 11, sameColor: true };
+  assert.strictEqual(blockReason(base, rules), '');
+  assert.match(blockReason({ ...base, openFor: 1.2 }, rules), /acaba de abrir/);
+  assert.match(blockReason({ ...base, openFor: 13 }, rules), /va a cerrar/);
+  assert.match(blockReason({ ...base, color: 'down' }, rules), /no confirma/);
+  assert.match(blockReason({ ...base, read: { ...base.read, pattern: 'rango' } }, rules), /rango/);
+  assert.match(blockReason({ ...base, read: { ...base.read, margin: 4 } }, rules), /ventaja 4/);
+  assert.match(blockReason({ ...base, payout: 80 }, rules), /paga 80/);
+  assert.strictEqual(pickBest([{ ...base, openFor: 1 }, { ...base, name: 'B', read: { ...base.read, dir: 'down' }, color: 'down' }], rules).name, 'B');
+  assert.strictEqual(pickBest([{ ...base, openFor: 1 }], rules), null);
+  assert.strictEqual(blockReason(base, {}), ''); // sin reglas nuevas, como antes
+});

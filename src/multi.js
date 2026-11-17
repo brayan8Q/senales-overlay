@@ -52,11 +52,30 @@ function readPair({ closed, forming, time, asset = '' }) {
 }
 
 /**
+ * Por que NO se entra en ese par ahora ('' = se puede). Reglas (16 nov 2026, «solo confianza muy alta, que entienda la
+ * ultima vela y la tendencia… no abrir en cuanto inicia la vela sin saber hacia donde va»): ventaja minima de
+ * lecturas, pago minimo, solo ciertos tipos de jugada (`only`), la vela en curso con `minAge`–`maxAge` segundos
+ * abierta y, con `sameColor`, del color de la entrada.
+ */
+function blockReason(r, { minMargin = 2, minPayout = 80, avoid = [], only = null, minAge = null, maxAge = null, sameColor = false } = {}) {
+  if (!r.read) return 'juntando velas';
+  if (r.age > STALE_S) return 'sin precio';
+  if ((r.payout || 0) < minPayout) return `paga ${r.payout || 0} %`;
+  if (!r.read.dir) return 'sin lado claro';
+  if (r.read.margin < minMargin) return `ventaja ${r.read.margin} (entra con ${minMargin})`;
+  if (avoid.includes(r.read.pattern) || (only && only.length && !only.includes(r.read.pattern))) return `jugada de ${r.read.pattern}: no es a favor de la tendencia`;
+  if (Number.isFinite(minAge) && Number.isFinite(r.openFor) && r.openFor < minAge) return `la vela acaba de abrir (va en ${Math.max(0, Math.floor(r.openFor))} s): espero a ver hacia dónde va`;
+  if (Number.isFinite(maxAge) && Number.isFinite(r.openFor) && r.openFor > maxAge) return 'la vela ya va a cerrar: espero la siguiente';
+  if (sameColor && r.color && r.color !== r.read.dir) return `la vela actual va ${r.color === 'up' ? 'verde' : r.color === 'down' ? 'roja' : 'sin cuerpo'}: no confirma`;
+  return '';
+}
+
+/**
  * El par donde conviene entrar ahora: el de mayor ventaja en votos; si empatan, el que paga mas y despues el de
  * precio mas fresco. `avoid` = tipos de jugada apagados.
  */
-function pickBest(reads, { minMargin = 2, minPayout = 80, avoid = [] } = {}) {
-  const ok = reads.filter((r) => r.read && r.read.dir && r.read.margin >= minMargin && r.age <= STALE_S && (r.payout || 0) >= minPayout && !avoid.includes(r.read.pattern));
+function pickBest(reads, options = {}) {
+  const ok = reads.filter((r) => !blockReason(r, options));
   ok.sort((a, b) => b.read.margin - a.read.margin || (b.payout || 0) - (a.payout || 0) || a.age - b.age);
   return ok[0] || null;
 }
@@ -103,7 +122,9 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
       const time = new Date(now());
       state.books = new Map(answer.pairs.map(([, name, , closed, forming, , openFor]) => [pairKey(name), { closed: closed.slice(-64).map(toCandle), forming: toCandle(forming), openFor, at: now() }]));
       state.reads = answer.pairs.map(([symbol, name, payout, closed, forming, age, openFor]) => ({
-        symbol, name, payout, age, candles: closed.length, openFor, up: forming[3] >= forming[0], read: readPair({ closed, forming, time, asset: name }),
+        symbol, name, payout, age, candles: closed.length, openFor, up: forming[3] >= forming[0],
+        color: forming[3] > forming[0] ? 'up' : forming[3] < forming[0] ? 'down' : 'flat',
+        read: readPair({ closed, forming, time, asset: name }),
       }));
       // Despues de perder, la recuperacion se busca en los OTROS pares (si hay mas de uno).
       const jump = state.level > 0 && state.lostIn && state.reads.length > 1;
@@ -217,7 +238,7 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
         on: Boolean(cfg.on),
         minPayout: cfg.minPayout || 0,
         minMargin: cfg.minMargin || 0,
-        pairs: state.reads.map((r) => ({ name: r.name, payout: r.payout, dir: r.read ? r.read.dir : null, margin: r.read ? r.read.margin : 0, pattern: r.read ? r.read.pattern : null, ready: Boolean(r.read), stale: r.age > STALE_S, openFor: r.openFor, up: r.up, rest: Math.max(0, Math.ceil(((state.cool.get(r.name) || 0) - now()) / 1000)) })),
+        pairs: state.reads.map((r) => ({ name: r.name, payout: r.payout, dir: r.read ? r.read.dir : null, margin: r.read ? r.read.margin : 0, pattern: r.read ? r.read.pattern : null, ready: Boolean(r.read), stale: r.age > STALE_S, openFor: r.openFor, up: r.up, why: blockReason(r, cfg), rest: Math.max(0, Math.ceil(((state.cool.get(r.name) || 0) - now()) / 1000)) })),
         pick: state.pick,
         level: state.level,
         lostIn: state.level > 0 ? state.lostIn : null,
@@ -230,4 +251,4 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
   };
 }
 
-module.exports = { readPair, pickBest, createMultiEngine, pairKey, MIN_CANDLES };
+module.exports = { readPair, pickBest, blockReason, createMultiEngine, pairKey, MIN_CANDLES };
