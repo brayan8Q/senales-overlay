@@ -18,6 +18,45 @@ Este documento tiene dos partes:
 
 ---
 
+## Cómo se ve (fotos)
+
+Las fotos están en la carpeta [`fotos/`](fotos). Son recortes de la pantalla del dueño: se quitaron las pestañas del navegador, el saldo y la foto de perfil.
+
+### 1. Pocket con las 4 gráficas y sus marcos — así debe quedar
+
+![Pocket con 4 gráficas y los marcos del panel](fotos/01_pocket_4_graficas_con_marcos.jpg)
+
+- Cada gráfica tiene su marco punteado azul y un letrero arriba con su número, su par y lo que lee el panel.
+- La gráfica 1 está en **naranja**: dice `PON AQUÍ EUR/USD OTC`. El panel cambió el par de ese lugar porque AUD/USD dejó de pagar bien, y la gráfica de Pocket todavía muestra el par viejo. **Eso es lo que hay que corregir**: cambiar esa gráfica al par que pide.
+- El recuadro amarillo marca la vela que va en curso, con su letrero «vela actual».
+- La gráfica 3 dice «perdió aquí: descansa 17 s»: el bot no repite en un par donde acaba de perder.
+
+### 2. El panel
+
+![Panel Lector](fotos/02_panel_lector.jpg)
+
+Lista de los 4 pares con lo que paga cada uno y hacia dónde apunta, el estado del bot y el marcador de ganadas y perdidas.
+
+### 3. Vista M10 con velas de 15 segundos
+
+![Vista M10](fotos/03_pocket_vista_m10_vela_actual.jpg)
+
+Así se ven las gráficas con la vista en **M10** (abajo a la izquierda de cada una). Las gráficas 1 y 2 dicen «ahora paga 80 %: aquí no entro»: son pares que bajaron de pago y hay que cambiarlos.
+
+### 4. El selector de la vista
+
+![Selector de vista](fotos/05_selector_de_vista_M10.png)
+
+Es el menú de abajo a la izquierda de cada gráfica. Aquí se escoge **M10**. Ojo: este menú no cambia el tamaño de la vela; eso va en el menú de tipo de gráfica (ver A3).
+
+### 5. La ventana «Lector · 4 gráficas»
+
+![Ventana Lector 4 gráficas](fotos/04_ventana_lector_4_graficas.jpg)
+
+Gráficas que dibuja el propio panel con las velas del bot. Aquí los pares cambian solos. Sirve de referencia para saber qué par va en cada lugar.
+
+---
+
 ## Parte A — Lo que hay que hacer en la pantalla
 
 ### A1. Qué pares poner
