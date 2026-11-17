@@ -103,6 +103,87 @@ Gráficas que dibuja el propio panel con las velas del bot. Viene **apagada**: e
 
 ## Parte A — Lo que hay que hacer en la pantalla
 
+### A0. Dónde van los márgenes (se hace una vez; es lo más importante)
+
+Cada gráfica de Pocket lleva **su propio margen** (la zona que el panel escanea). Si un margen queda mal puesto, el panel lee mal las velas de esa gráfica. Esta foto marca el lugar exacto:
+
+![Dónde va cada margen](fotos/08_donde_van_los_margenes.jpg)
+
+- **Verde = por ahí va el margen.** Un margen por gráfica, numerados 1 (arriba izquierda), 2 (arriba derecha), 3 (abajo izquierda), 4 (abajo derecha).
+- **Rojo = NUNCA dentro del margen:** los recuadros de tiempo y monto y los botones verde y rojo de compra y venta.
+- **Naranja = NUNCA dentro del margen:** el renglón con el nombre del par y sus banderas.
+
+**Por qué:** el panel reconoce las velas por su color verde y rojo. Los botones de compra y venta y las banderas también tienen verde y rojo, y si quedan dentro los toma por velas.
+
+#### Los cuatro bordes de cada margen
+
+| Borde | Dónde va exactamente |
+|---|---|
+| **Arriba** | Justo **debajo** del renglón del nombre del par (debajo de las banderas y de los botones `···`). El nombre del par queda fuera. |
+| **Abajo** | Justo **encima** de la gráfica de abajo (o del borde de la ventana). Los números de la hora y el selector `M10` pueden quedar dentro: son grises y no estorban. |
+| **Izquierda** | Donde empieza la gráfica, pegado al menú lateral de Pocket (Trading, Finance…) en las gráficas 1 y 3, y al borde izquierdo de la gráfica en la 2 y la 4. |
+| **Derecha** | **Después** de los números del eje de precios y **antes** de los recuadros de tiempo y monto. Los números de precio quedan dentro; los botones quedan fuera. |
+
+Tres cosas que tienen que quedar **dentro** del margen:
+
+1. **Todas las velas visibles** de esa gráfica.
+2. **El hueco a la derecha de la última vela**, donde nace la vela nueva. Si el margen se corta justo en la última vela, el panel no ve la que va en curso.
+3. **Solo esa gráfica.** Los márgenes no se enciman entre sí ni toman un pedazo de la gráfica vecina.
+
+#### Cómo se marca
+
+1. En el panel LECTOR, abrir ⚙.
+2. Pulsar **«Marcar gráfica 1»**. La pantalla se oscurece y pide arrastrar un recuadro.
+3. Poner el cursor en la esquina de **arriba a la izquierda** del margen (debajo del nombre del par, pegado al inicio de la gráfica), mantener pulsado y arrastrar hasta la esquina de **abajo a la derecha** (después de los números de precio, antes de los botones). Soltar.
+4. El botón «Marcar gráfica 1» se pone de color: ya quedó. Repetir con la 2, la 3 y la 4.
+5. Si quedó mal, pulsar otra vez «Marcar gráfica N» y volver a arrastrar. La `✕` de ese renglón lo quita. `Esc` cancela mientras se arrastra.
+
+#### Medidas de referencia
+
+Son las del equipo del dueño: pantalla de 1920 × 1080 con escala de Windows al 125 %, Chrome maximizado al 100 % de zoom, vista de 4 gráficas de Pocket con el menú lateral abierto. En otro tamaño de pantalla cambian; ahí se marca a ojo con las reglas de arriba.
+
+| Margen | Desde la izquierda | Desde arriba | Ancho | Alto |
+|---|---|---|---|---|
+| 1 | 114 px | 276 px | 678 px | 349 px |
+| 2 | 989 px | 284 px | 596 px | 326 px |
+| 3 | 116 px | 673 px | 670 px | 308 px |
+| 4 | 989 px | 673 px | 616 px | 320 px |
+
+#### Lo que no se puede mover después de marcar
+
+Los márgenes son posiciones fijas de la pantalla. Hay que volver a marcarlos si cambia cualquiera de estas cosas:
+
+- La ventana del navegador se mueve, se cambia de tamaño o deja de estar maximizada.
+- Cambia el zoom del navegador (debe estar en 100 %).
+- Se cierra o se abre el menú lateral de Pocket, o se cambia la vista de 4 gráficas por otra.
+- Se desplaza la página hacia arriba o hacia abajo.
+
+Y mientras el bot trabaja: **ninguna otra ventana encima de las gráficas**. El panel lee lo que hay en pantalla; si algo tapa una gráfica, deja de leerla.
+
+#### Cómo saber que cada margen quedó bien
+
+Con la gráfica en el par correcto, en S15 y M10, en unos 5 segundos debe verse **todo esto** en cada una de las cuatro:
+
+- [ ] El marco punteado **azul** (no naranja) y el letrero con el número y el par correcto.
+- [ ] La franja azul del escáner pasando de izquierda a derecha.
+- [ ] Un recuadro fino alrededor de **cada vela**.
+- [ ] El **recuadro amarillo sobre la última vela**, la que se está moviendo, con el letrero «vela actual» y un contador que avanza de 0 a 15.
+- [ ] Ningún recuadro sobre un botón, una bandera o un número.
+
+#### Si algo no se ve bien
+
+| Lo que se ve | Causa | Arreglo |
+|---|---|---|
+| Marco **naranja** «PON AQUÍ …» | La gráfica muestra un par distinto al de ese lugar | Cambiar la gráfica al par que pide (A2) |
+| Letrero «Esta gráfica no es la del par de arriba» | El par no coincide, o las velas no son de 15 s | Revisar el par y poner S15 (A3) |
+| No aparece el recuadro amarillo | El margen corta la última vela, o hay menos de 8 velas a la vista | Marcar de nuevo dejando hueco a la derecha; poner la vista en **M10** |
+| El recuadro amarillo cae en una vela que no es la última | El margen incluye botones o banderas | Marcar de nuevo dejándolos fuera |
+| Recuadros finos sobre los botones verde y rojo | El borde derecho se pasó | Marcar de nuevo, terminando antes de los botones |
+| «sin precio» o «juntando velas» | El bot acaba de abrir o no tiene ese par | Esperar un minuto; revisar que el nombre del par esté bien escrito en ⚙ |
+| Los marcos quedaron corridos respecto a las gráficas | Se movió la ventana, el zoom o la página | Volver a marcar los cuatro |
+
+La vista **M10 es obligatoria**: con M3 solo caben unas 7 velas y el panel necesita ver al menos 8 para ubicar la vela actual sin fallas.
+
 ### A1. Qué pares poner
 
 El sistema decide los cuatro pares y escoge otro cuando uno paga menos de 90 %. Dónde se lee cuál poner:
