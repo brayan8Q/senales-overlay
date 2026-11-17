@@ -531,7 +531,9 @@ function renderMultiZones(s) {
     } else if (p.dir) {
       tone = p.dir;
       if (mu.pick === p.name) cls += ' pick';
-      text += ` · ${arrow[p.dir]} · ${p.margin} de ventaja · ${p.pattern}${p.payout ? ` · paga ${p.payout} %` : ''}`;
+      // Verde/rojo solo si alcanza la ventaja pedida para entrar; si no, se ve hacia dónde apunta pero en gris.
+      if (mu.minMargin && p.margin < mu.minMargin) tone = '';
+      text += ` · ${arrow[p.dir]} · ${p.margin} de ventaja${mu.minMargin && p.margin < mu.minMargin ? ` (entra con ${mu.minMargin})` : ' · CONFIANZA ALTA'} · ${p.pattern}${p.payout ? ` · paga ${p.payout} %` : ''}`;
     } else text += ' · sin lado claro';
     el.className = cls;
     label.className = `mlabel${tone && !o ? ` ${tone}` : ''}`;

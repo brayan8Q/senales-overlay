@@ -164,7 +164,7 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
     const endSeries = (how) => {
       record(`Q,${now()},serie,${how},${state.seriesNet.toFixed(2)}`);
       state.tally.series++;
-      if (how === 'perdida') state.tally.lost++;
+      if (how === 'perdida' && cfg.levels > 0) state.tally.lost++; // sin martingala una perdida no es una «serie perdida»
       state.level = 0;
       state.seriesNet = 0;
       state.lostIn = null;
@@ -201,6 +201,7 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
       return {
         on: Boolean(cfg.on),
         minPayout: cfg.minPayout || 0,
+        minMargin: cfg.minMargin || 0,
         pairs: state.reads.map((r) => ({ name: r.name, payout: r.payout, dir: r.read ? r.read.dir : null, margin: r.read ? r.read.margin : 0, pattern: r.read ? r.read.pattern : null, ready: Boolean(r.read), stale: r.age > STALE_S, openFor: r.openFor, up: r.up })),
         pick: state.pick,
         level: state.level,
