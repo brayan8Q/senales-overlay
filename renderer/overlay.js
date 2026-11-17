@@ -121,6 +121,7 @@ $('btn-settings').addEventListener('click', () => showSettings(!settingsOpen));
 $('btn-zone').addEventListener('click', () => startSelect(null));
 // Varios pares a la vez: encender, y la zona y el par de cada gráfica.
 $('multi-on').addEventListener('change', (e) => api.setMulti(e.target.checked));
+$('multi-wall').addEventListener('change', (e) => api.setMultiWall(e.target.checked));
 for (const b of document.querySelectorAll('.mz-btn')) b.addEventListener('click', () => startSelect(Number(b.dataset.i)));
 for (const b of document.querySelectorAll('.mz-clear')) b.addEventListener('click', () => api.setMultiZone(Number(b.dataset.i), null));
 for (const input of document.querySelectorAll('.mz-pair')) input.addEventListener('change', () => api.setMultiPair(Number(input.dataset.i), input.value));
@@ -486,6 +487,7 @@ function renderMultiZones(s) {
   const mu = s.multi;
   const slots = mu ? mu.slots : [];
   $('multi-on').checked = Boolean(mu && mu.enabled);
+  $('multi-wall').checked = Boolean(mu && mu.wall && mu.wall.on);
   document.querySelectorAll('.mz-pair').forEach((input, i) => {
     if (document.activeElement !== input) input.value = slots[i] ? slots[i].name : '';
   });

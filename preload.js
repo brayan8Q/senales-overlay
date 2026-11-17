@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('senales', {
   setInstant: (value) => ipcRenderer.send('set-instant', value),
   setAsset: (value) => ipcRenderer.send('set-asset', value),
   setMulti: (value) => ipcRenderer.send('set-multi', value),
+  setMultiWall: (value) => ipcRenderer.send('set-multi-wall', value),
   setMultiPair: (index, value) => ipcRenderer.send('set-multi-pair', index, value),
   setMultiZone: (index, rect) => ipcRenderer.send('set-multi-zone', index, rect),
   setPatternVeto: (value) => ipcRenderer.send('set-pattern-veto', value),
