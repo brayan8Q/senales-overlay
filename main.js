@@ -850,7 +850,8 @@ let multiMisfit = [0, 0, 0, 0]; // por zona: desde cuando las velas de la pantal
 let multiScanBusy = false;
 const multiDrawn = () => Boolean(config.multi && config.multiZones.some(Boolean));
 async function multiScanTick() {
-  if (multiScanBusy || !multiDrawn() || !scanProtected) return; // sin la ventana oculta a las capturas se leeria el propio dibujo
+  // Sin la ventana oculta a las capturas se leeria el propio dibujo (tambien mientras se toma una foto de la pantalla).
+  if (multiScanBusy || !multiDrawn() || !scanProtected || photoBusy) return;
   multiScanBusy = true;
   try {
     const shot = await captureScreen();
