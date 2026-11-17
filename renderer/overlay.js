@@ -851,6 +851,11 @@ api.onState((s) => {
       text = `Bot DEMO en pausa · ${b.pause}`;
       cls = b.enabled ? 'warn' : '';
     }
+    // Con varios pares el bot no está en pausa: opera por la lista de pares.
+    if (mu && mu.on && b.online) {
+      text = `Bot DEMO${money} · operando ${mu.pairs.length} pares a la vez`;
+      cls = 'on';
+    }
     botChip.textContent = text;
     botChip.className = cls;
     botChip.title = 'Bot de Pocket en la cuenta DEMO (trader\\pocket_tyl\\lector.py). Abre la operación de cada señal y de su martingala; el panel cuenta desde esa entrada y usa el resultado de Pocket.';
