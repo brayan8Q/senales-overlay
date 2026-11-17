@@ -1,7 +1,7 @@
 // Las 4 graficas del panel (16 nov 2026): nombres de simbolo, reparto y zona de cada grafica.
 const test = require('node:test');
 const assert = require('node:assert');
-const { symbolOf, gridBounds, zoneOf, SETUP_SCRIPT, switchScript, ZONE } = require('../src/wall');
+const { symbolOf, gridBounds, zoomFor, zoneOf, SETUP_SCRIPT, switchScript, ZONE, PAGE_MIN } = require('../src/wall');
 
 test('el nombre del par se pasa al simbolo de la terminal', () => {
   assert.strictEqual(symbolOf('EUR/USD OTC'), 'EURUSD_otc');
@@ -29,4 +29,12 @@ test('los guiones de la pagina son codigo valido y no tocan compra ni venta', ()
   assert.doesNotThrow(() => new Function(switchScript('EURUSD_otc')));
   assert.ok(!/btn-call|btn-put|buy|sell/i.test(SETUP_SCRIPT.replace(/\.control-wrap/g, '')));
   assert.match(switchScript('EURUSD_otc'), /po-td-asset/);
+});
+
+test('una grafica chica se reduce para que la pagina quepa entera, y su zona se pasa a puntos de pantalla', () => {
+  const zoom = zoomFor({ width: 650, height: 386 });
+  assert.ok(650 / zoom >= PAGE_MIN.width - 1 && 386 / zoom >= PAGE_MIN.height - 1);
+  assert.strictEqual(zoomFor({ width: 3000, height: 2000 }), 1);
+  const zone = zoneOf({ x: 0, y: 0 }, { x: 100, y: 50 }, [0, 0, 1000, 700], 0.5);
+  assert.deepStrictEqual(zone, { x: 100 + ZONE.left * 0.5, y: 50 + ZONE.top * 0.5, width: 500 - (ZONE.left + ZONE.right) * 0.5, height: 350 - (ZONE.top + ZONE.bottom) * 0.5 });
 });

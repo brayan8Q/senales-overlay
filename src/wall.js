@@ -26,6 +26,14 @@ function symbolOf(name) {
   return base ? base.toUpperCase() + (otc ? '_otc' : '') : '';
 }
 
+// La terminal de Pocket no se encoge por debajo de este tamaño (medido: en un recuadro chico la grafica se salia
+// por abajo). Cada grafica se muestra reducida lo justo para que la pagina crea que tiene al menos esto.
+const PAGE_MIN = { width: 1150, height: 700 };
+/** Cuanto hay que reducir la pagina para que quepa entera en un recuadro de ese tamaño. */
+function zoomFor(bounds) {
+  return Math.max(0.3, Math.min(1, bounds.width / PAGE_MIN.width, bounds.height / PAGE_MIN.height));
+}
+
 /** Cuatro recuadros (2 × 2) dentro de una ventana de `width` × `height`. */
 function gridBounds(width, height) {
   const w = Math.max(120, Math.floor((width - GAP) / 2));
@@ -44,14 +52,16 @@ function gridBounds(width, height) {
  * @param {{x:number,y:number}} view esquina de la grafica dentro de la ventana
  * @param {number[]} canvas [x, y, ancho, alto] del lienzo dentro de la pagina
  */
-function zoneOf(content, view, canvas) {
+function zoneOf(content, view, canvas, zoom = 1) {
   if (!canvas || canvas.length < 4) return null;
-  const [cx, cy, cw, ch] = canvas;
+  // La pagina se ve reducida (`zoom`): sus medidas se pasan a puntos de pantalla.
+  const [cx, cy, cw, ch] = canvas.map((v) => v * zoom);
+  const m = { top: ZONE.top * zoom, right: ZONE.right * zoom, bottom: ZONE.bottom * zoom, left: ZONE.left * zoom };
   const zone = {
-    x: Math.round(content.x + view.x + cx + ZONE.left),
-    y: Math.round(content.y + view.y + cy + ZONE.top),
-    width: Math.round(cw - ZONE.left - ZONE.right),
-    height: Math.round(ch - ZONE.top - ZONE.bottom),
+    x: Math.round(content.x + view.x + cx + m.left),
+    y: Math.round(content.y + view.y + cy + m.top),
+    width: Math.round(cw - m.left - m.right),
+    height: Math.round(ch - m.top - m.bottom),
   };
   return zone.width >= 60 && zone.height >= 40 ? zone : null;
 }
@@ -124,4 +134,4 @@ const SETUP_SCRIPT = `(async () => {
 /** Guion que cambia el par de la terminal (lo guarda donde ella lo lee y recarga). */
 const switchScript = (symbol) => `localStorage.setItem('po-td-asset', ${JSON.stringify(symbol)}); location.reload();`;
 
-module.exports = { URL, symbolOf, gridBounds, zoneOf, SETUP_SCRIPT, switchScript, CLEAN_CSS, ZONE, GAP };
+module.exports = { URL, symbolOf, gridBounds, zoomFor, zoneOf, PAGE_MIN, SETUP_SCRIPT, switchScript, CLEAN_CSS, ZONE, GAP };

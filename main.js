@@ -983,13 +983,28 @@ function openWall() {
       const view = new WebContentsView({ webPreferences: { partition: `persist:grafica-${i + 1}`, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
       frame.contentView.addChildView(view);
       view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-      view.webContents.loadURL(wallKit.URL).catch(() => {});
-      return { view, symbol: '', tries: { key: '', count: 0, at: 0 }, note: 'cargando' };
+      // De una en una (cuatro a la vez dejaban dos en blanco) y, si una no carga, se vuelve a pedir.
+      const slot = { view, symbol: '', tries: { key: '', count: 0, at: 0 }, note: 'cargando', zoom: 1, askedAt: 0 };
+      const load = () => {
+        if (view.webContents.isDestroyed()) return;
+        slot.askedAt = Date.now();
+        view.webContents.loadURL(wallKit.URL).catch(() => {});
+      };
+      slot.load = load;
+      setTimeout(load, 300 + i * 3000);
+      view.webContents.on('did-finish-load', () => {
+        if (!view.webContents.isDestroyed()) view.webContents.setZoomFactor(slot.zoom);
+      });
+      return slot;
     });
     const layout = () => {
       if (frame.isDestroyed()) return;
       const [width, height] = frame.getContentSize();
-      wallKit.gridBounds(width, height).forEach((bounds, i) => views[i].view.setBounds(bounds));
+      wallKit.gridBounds(width, height).forEach((bounds, i) => {
+        views[i].view.setBounds(bounds);
+        views[i].zoom = wallKit.zoomFor(bounds);
+        if (!views[i].view.webContents.isDestroyed()) views[i].view.webContents.setZoomFactor(views[i].zoom);
+      });
     };
     layout();
     frame.on('resize', layout);
@@ -1043,11 +1058,13 @@ async function wallTick() {
       wall.views.map(async (slot, i) => {
         const want = wallKit.symbolOf(config.multiPairs[i]);
         const contents = slot.view.webContents;
-        if (contents.isDestroyed() || contents.isLoading()) {
+        if (contents.isDestroyed() || contents.isLoading() || !slot.askedAt) {
           slot.note = 'cargando';
           wallZones[i] = null;
+          if (slot.askedAt && now - slot.askedAt > 45000) slot.load(); // lleva mucho cargando: se pide otra vez
           return;
         }
+        if (Math.abs(contents.getZoomFactor() - slot.zoom) > 0.01) contents.setZoomFactor(slot.zoom);
         let seen = null;
         try {
           seen = await contents.executeJavaScript(wallKit.SETUP_SCRIPT, true);
@@ -1057,6 +1074,7 @@ async function wallTick() {
         if (!seen || !seen.ok) {
           slot.note = (seen && seen.why) || 'cargando';
           wallZones[i] = null;
+          if (now - slot.askedAt > 45000) slot.load(); // cargo pero sin grafica (pagina en blanco): otra vez
           return;
         }
         slot.symbol = seen.symbol;
@@ -1068,6 +1086,7 @@ async function wallTick() {
             slot.tries = { key: want, count: same ? slot.tries.count + 1 : 1, at: now };
             slot.note = 'cambiando de par';
             record(`Q,${now},grafica,${i + 1},${seen.symbol || '?'} -> ${want}`);
+            slot.askedAt = now;
             contents.executeJavaScript(wallKit.switchScript(want), true).catch(() => {});
           }
           wallZones[i] = null;
@@ -1075,7 +1094,7 @@ async function wallTick() {
           return;
         }
         slot.note = seen.inactive ? 'ese par está cerrado en la terminal de prueba' : seen.s15 ? '' : 'poniendo velas de 15 s';
-        const zone = active && want ? wallKit.zoneOf(content, slot.view.getBounds(), seen.canvas) : null;
+        const zone = active && want ? wallKit.zoneOf(content, slot.view.getBounds(), seen.canvas, slot.zoom) : null;
         const before = wallZones[i];
         wallZones[i] = zone;
         if (zone && before && (zone.x !== before.x || zone.y !== before.y || zone.width !== before.width || zone.height !== before.height)) multiTrack[i] = null;
