@@ -1,20 +1,24 @@
 # Instrucciones para Muse — Pocket Option con 4 gráficas
 
-Estado al 16 de noviembre de 2026, 21:00. Todo es **cuenta DEMO**. Rama: `mejoras-15nov`.
+Estado al 16 de noviembre de 2026, 21:15. Todo es **cuenta DEMO**. Rama: `principal` (es la única).
+
+## La versión que se usa
+
+**Las gráficas son las de Pocket Option.** El sistema escoge el par de cada una de las 4 gráficas y **dice cuál poner**; quien maneja la pantalla (el dueño, o Muse) cambia la gráfica en Pocket y la deja en **S15** y **M10**. El bot opera solo sobre esos pares.
 
 Este documento tiene dos partes:
 
-- **Parte A — lo que hay que hacer en la pantalla** (hoy, a mano): mantener las 4 gráficas de Pocket en los pares que el panel pide, en velas **S15** y vista **M10**.
-- **Parte B — lo que falta programar** para que eso lo haga el sistema solo.
+- **Parte A — lo que hay que hacer en la pantalla**: mantener las 4 gráficas de Pocket en los pares que el sistema pide, en velas **S15** y vista **M10**. Esto es lo que hace Muse.
+- **Parte B — para más adelante**: lo que habría que programar si se quiere que el sistema cambie las gráficas de Pocket él mismo.
 
 ---
 
 ## Qué quiere el dueño
 
-1. Ver **4 gráficas de Pocket Option a la vez**. El bot analiza las cuatro y entra en la que tenga la mejor señal.
-2. Que los **pares se cambien solos**: el pago de un par cambia en minutos (se vio 92 % → 40 % en menos de media hora). Siempre debe haber cuatro pares que paguen 90 % o más.
+1. Ver **4 gráficas de Pocket Option a la vez**, con el escáner del panel encima de cada una. El bot analiza las cuatro y entra en la que tenga la mejor señal.
+2. Que el sistema **diga por cuál par irse**: el pago de un par cambia en minutos (se vio 92 % → 40 % en menos de media hora). Cuando un par deja de pagar 90 %, el sistema escoge otro y lo pide con un letrero naranja sobre esa gráfica.
 3. Cada gráfica siempre en **velas de 15 segundos (S15)** y **vista M10**.
-4. Que **no deje de funcionar** y no tener que tocar nada.
+4. Que **no deje de funcionar**.
 
 ---
 
@@ -49,11 +53,11 @@ Así se ven las gráficas con la vista en **M10** (abajo a la izquierda de cada 
 
 Es el menú de abajo a la izquierda de cada gráfica. Aquí se escoge **M10**. Ojo: este menú no cambia el tamaño de la vela; eso va en el menú de tipo de gráfica (ver A3).
 
-### 5. La ventana «Lector · 4 gráficas»
+### 5. La ventana «Lector · 4 gráficas» (apagada; no es la que se usa)
 
 ![Ventana Lector 4 gráficas](fotos/04_ventana_lector_4_graficas.jpg)
 
-Gráficas que dibuja el propio panel con las velas del bot. Aquí los pares cambian solos. Sirve de referencia para saber qué par va en cada lugar.
+Gráficas que dibuja el propio panel con las velas del bot. Viene **apagada**: el dueño prefiere las gráficas de Pocket con sus marcos. Se puede encender en ⚙ («Usar las 4 gráficas del panel») solo como referencia; mientras está abierta no hay marcos sobre Pocket.
 
 ---
 
@@ -61,11 +65,13 @@ Gráficas que dibuja el propio panel con las velas del bot. Aquí los pares camb
 
 ### A1. Qué pares poner
 
-El panel decide los cuatro pares y los cambia solo cuando uno paga menos de 90 %. Se pueden leer en cualquiera de estos sitios:
+El sistema decide los cuatro pares y escoge otro cuando uno paga menos de 90 %. Dónde se lee cuál poner:
 
-- La ventana **«Lector · 4 gráficas»**: el título de cada gráfica dice `1 · EUR/USD OTC · paga 92 %`.
-- El panel **LECTOR** (arriba a la derecha): cuadro «4 PARES A LA VEZ».
-- Si las gráficas de Pocket tienen su marco del escáner, el marco se pone **naranja** y dice `PON AQUÍ <par>` cuando la gráfica que se ve no es la del par de ese lugar.
+- **Sobre la gráfica de Pocket:** el marco de esa gráfica se pone **naranja** y dice `PON AQUÍ <par>`. Esa es la señal de que hay que cambiarla (foto 1).
+- **En el panel LECTOR** (arriba a la derecha): el cuadro «4 PARES A LA VEZ» lista los cuatro pares en orden, con lo que paga cada uno.
+- En ⚙ del panel, cada renglón «Marcar gráfica N» muestra el par de ese lugar.
+
+Cuando la gráfica ya muestra el par pedido, el marco vuelve a azul y el escáner sigue la vela actual.
 
 Regla: la gráfica 1 de Pocket lleva el par del lugar 1, la 2 el del lugar 2, y así. Arriba a la izquierda va la 1, arriba a la derecha la 2, abajo a la izquierda la 3 y abajo a la derecha la 4.
 
@@ -95,7 +101,9 @@ Orden que funciona: primero la vista **M10**, después **S15**. Al revés, una v
 
 ---
 
-## Parte B — Lo que falta programar
+## Parte B — Para más adelante: que el sistema cambie las gráficas él mismo
+
+Hoy el cambio de par en Pocket lo hace quien maneja la pantalla (Parte A). Esto es lo que habría que programar para que lo haga el sistema.
 
 ### B1. La idea
 
@@ -148,7 +156,7 @@ No programar esto a ciegas: primero abrir la página, mirar el DOM y anotar los 
 | Motor de varios pares | `src/multi.js` | Lee 4 pares con las velas del bot, escoge el mejor, una operación a la vez, no se aferra al par donde pierde, reglas de entrada (`blockReason`) |
 | Cambio de pares solo | `src/autopairs.js` | Un par que paga menos del mínimo durante 20 s se cambia por el mejor pagado que no esté en uso |
 | Vela actual en cada gráfica | `src/zonetrack.js` | Casa las velas vistas en pantalla con las del bot y ubica la vela en curso |
-| Gráficas propias | `renderer/wall.html`, `wall.js`, `wall.css`, `wallmath.js` | Ventana «Lector · 4 gráficas»: el panel dibuja las gráficas con las velas del bot, sin cargar páginas de Pocket |
+| Gráficas propias (apagadas) | `renderer/wall.html`, `wall.js`, `wall.css`, `wallmath.js` | Ventana «Lector · 4 gráficas»: el panel dibuja las gráficas con las velas del bot. Ajuste `multiWall`, apagado por defecto |
 | Pruebas | `test/multi.test.js`, `autopairs.test.js`, `zonetrack.test.js`, `wallmath.test.js` | 365 pruebas en total: `npm test` |
 
 Ajustes (en `config.json` de la carpeta de datos del panel): `multi`, `multiPairs` (4 lugares), `multiZones`, `multiMinMargin` (5), `multiMinPayout` (90), `multiAuto`, `multiWall`, `multiOnly` (`tendencia`, `rompimiento`), `multiMinAge` (5), `multiMaxAge` (11), `multiSameColor`.
