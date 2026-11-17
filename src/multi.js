@@ -84,6 +84,8 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
     lostIn: null, // par donde se perdio la ultima entrada de la serie en curso: la martingala sale en otro
     lostAt: 0,
     nextAt: 0, // uno a uno: respiro entre un resultado y la entrada siguiente
+    cool: new Map(), // «que no se aferre»: par → hasta cuando descansa despues de perder ahi
+    streak: { name: null, losses: 0 }, // perdidas seguidas en el mismo par
   };
 
   async function tick() {
@@ -106,8 +108,13 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
       // Despues de perder, la recuperacion se busca en los OTROS pares (si hay mas de uno).
       const jump = state.level > 0 && state.lostIn && state.reads.length > 1;
       const field = jump ? state.reads.filter((r) => r.name !== state.lostIn) : state.reads;
-      let best = pickBest(field, cfg);
-      if (!best && jump && now() - state.lostAt >= 6000) best = pickBest(field, { ...cfg, minMargin: 1 });
+      // Que no se aferre: un par donde se acaba de perder descansa; solo se repite si su tendencia es clara
+      // (jugada de tendencia con una lectura mas de la pedida) y nunca tras dos perdidas seguidas ahi.
+      const resting = (r) => (state.cool.get(r.name) || 0) > now();
+      const clearTrend = (r) => r.read && r.read.pattern === 'tendencia' && r.read.margin >= (cfg.minMargin || 2) + 1 && !(state.streak.name === r.name && state.streak.losses >= 2);
+      const open = state.reads.length > 1 ? field.filter((r) => !resting(r) || clearTrend(r)) : field;
+      let best = pickBest(open, cfg);
+      if (!best && jump && now() - state.lostAt >= 6000) best = pickBest(open, { ...cfg, minMargin: 1 });
       state.pick = best ? best.name : null;
       if (now() - state.loggedAt >= 5000 || best) {
         state.loggedAt = now();
@@ -174,11 +181,15 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
     };
     if (done.result === 'win') {
       state.tally.wins++;
+      state.cool.delete(best.name);
+      if (state.streak.name === best.name) state.streak = { name: null, losses: 0 };
       endSeries('ganada');
     } else if (done.result === 'loss') {
       state.tally.losses++;
       state.lostIn = best.name;
       state.lostAt = now();
+      state.streak = { name: best.name, losses: state.streak.name === best.name ? state.streak.losses + 1 : 1 };
+      state.cool.set(best.name, now() + (state.streak.losses >= 2 ? cfg.coolLongMs || 120000 : cfg.coolMs || 45000));
       if (level >= cfg.levels) endSeries('perdida');
       else state.level = level + 1; // la recuperacion se busca en la vuelta siguiente, en el par que mejor lectura tenga
     } else {
@@ -206,7 +217,7 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
         on: Boolean(cfg.on),
         minPayout: cfg.minPayout || 0,
         minMargin: cfg.minMargin || 0,
-        pairs: state.reads.map((r) => ({ name: r.name, payout: r.payout, dir: r.read ? r.read.dir : null, margin: r.read ? r.read.margin : 0, pattern: r.read ? r.read.pattern : null, ready: Boolean(r.read), stale: r.age > STALE_S, openFor: r.openFor, up: r.up })),
+        pairs: state.reads.map((r) => ({ name: r.name, payout: r.payout, dir: r.read ? r.read.dir : null, margin: r.read ? r.read.margin : 0, pattern: r.read ? r.read.pattern : null, ready: Boolean(r.read), stale: r.age > STALE_S, openFor: r.openFor, up: r.up, rest: Math.max(0, Math.ceil(((state.cool.get(r.name) || 0) - now()) / 1000)) })),
         pick: state.pick,
         level: state.level,
         lostIn: state.level > 0 ? state.lostIn : null,

@@ -52,12 +52,22 @@ test('una lectura que no cuadra sostiene el ultimo dibujo unos segundos y despue
   assert.strictEqual(gone.current, null);
 });
 
-test('dentro de la misma vela la posicion no retrocede', () => {
-  const first = trackZone({ candles: screenAll, book, now: 100000 });
-  // lectura mala: la pantalla pierde las dos ultimas velas y el ajuste, por si solo, pondria la actual mas atras
-  const worse = { closed: closed.slice(0, 18), forming: closed[18], openFor: 7 };
-  const out = trackZone({ candles: screenAll.slice(0, 19), book: worse, prev: first.track, now: 101000 });
-  assert.ok(out.current.x0 >= first.current.x0 - 7);
+test('una lectura a media animacion (todo corrido unos pixeles) no deja el recuadro desfasado', () => {
+  const first = trackZone({ candles: screenNoForming, book, now: 100000 });
+  const mid = screenNoForming.map((c) => ({ ...c, x0: c.x0 + 6, x1: c.x1 + 6 })); // la grafica va recorriendose
+  const moving = trackZone({ candles: mid, book, prev: first.track, now: 100350 });
+  assert.strictEqual(moving.current.x0, first.current.x0 + 6); // acompaña a la grafica en ese instante
+  const after = trackZone({ candles: screenNoForming, book, prev: moving.track, now: 100700 });
+  assert.strictEqual(after.current.x0, first.current.x0); // y vuelve a su casilla: no se queda corrido
+});
+
+test('lo que queda a la derecha de la casilla (un globo de resultado) no se toma por la vela actual', () => {
+  const bubble = { x0: screenNoForming[18].x0 + 40, x1: screenNoForming[18].x0 + 52, open: 100300 + A, close: 100340 + A, high: 100345 + A, low: 100295 + A, dir: 'up' };
+  const out = trackZone({ candles: [...screenNoForming, bubble], book, now: 100000 });
+  assert.ok(out.current);
+  assert.strictEqual(out.current.x0, screenNoForming[18].x0 + 14);
+  assert.strictEqual(out.current.seen, false);
+  assert.strictEqual(out.marks.length, 19);
 });
 
 test('sin velas del bot se usa la mas a la derecha (como antes)', () => {

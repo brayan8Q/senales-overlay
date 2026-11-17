@@ -533,6 +533,8 @@ function renderMultiZones(s) {
     else if (p.payout && mu.minPayout && p.payout < mu.minPayout) {
       cls += ' off';
       text += ` · ahora paga ${p.payout} %: aquí no entro (mínimo ${mu.minPayout} %)`;
+    } else if (p.rest > 0 && !(p.pattern === 'tendencia' && p.margin >= (mu.minMargin || 2) + 1)) {
+      text += ` · perdió aquí: descansa ${p.rest} s${p.dir ? ` · ${p.dir === 'up' ? '▲' : '▼'} ${p.margin} de ventaja` : ''}`;
     } else if (p.dir) {
       tone = p.dir;
       if (mu.pick === p.name) cls += ' pick';

@@ -146,3 +146,29 @@ test('uno a uno: entre un resultado y la entrada siguiente hay un respiro; el ma
   assert.deepStrictEqual(engine.view().tally, { wins: 0, losses: 0, ties: 0, net: 0, series: 0, lost: 0 });
   assert.strictEqual(engine.view().level, 2); // la serie en curso sigue
 });
+
+test('no se aferra: tras perder en un par, ese par descansa aunque tenga la mejor lectura (sin martingala)', async () => {
+  const strong = staircase(MIN_CANDLES + 30, 0.01);
+  const books = { 'AAA OTC': strong, 'BBB OTC': strong };
+  const payouts = { 'AAA OTC': 92, 'BBB OTC': 91 };
+  const results = ['loss', 'loss', 'win'];
+  const orders = [];
+  let clock = 20000000;
+  // La ventaja pedida es justo la que tienen: asi no cuenta como «tendencia clara» (que pide una lectura mas).
+  const read = readPair({ closed: strong.slice(0, -1), forming: strong[strong.length - 1], time: new Date(clock) });
+  const bot = {
+    candles: async (pairs) => ({ ok: true, seconds: 15, pairs: pairs.map((name) => [name, name, payouts[name], books[name].slice(0, -1), books[name][books[name].length - 1], 0.3, 4]) }),
+    order: async (payload) => { orders.push(payload.asset); return { ok: true, id: 'x', open_price: 1, payout: 92, amount: 1, open_ms: clock, sent_ms: clock }; },
+    result: async () => { const result = results.shift() || 'win'; return { ok: true, result, net: result === 'win' ? 0.92 : -1, close_price: 1 }; },
+  };
+  const engine = createMultiEngine({ bot, record: () => {}, settings: () => ({ on: true, pairs: Object.keys(books), seconds: 3, levels: 0, minMargin: read.margin, minPayout: 80, avoid: [], restMs: 0, gapMs: 0, coolMs: 45000, coolLongMs: 120000 }), now: () => clock });
+  await engine.tick(); // AAA (paga mas) pierde → descansa 45 s
+  await engine.tick(); // no repite AAA: va a BBB, que tambien pierde → descansa
+  assert.deepStrictEqual(orders, ['AAA OTC', 'BBB OTC']);
+  await engine.tick(); // los dos descansan
+  assert.strictEqual(orders.length, 2);
+  assert.ok(engine.view().pairs.every((p) => p.rest > 0));
+  clock += 46000;
+  await engine.tick(); // ya descanso: vuelve a entrar
+  assert.strictEqual(orders.length >= 3, true);
+});

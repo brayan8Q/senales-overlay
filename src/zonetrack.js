@@ -1,24 +1,29 @@
 /**
  * SEGUIMIENTO DE LA VELA ACTUAL EN UNA ZONA (16 nov 2026).
  *
- * El usuario: «soluciona lo de la vela actual, el seguimiento, porque a veces regresa a una anterior». Pasaba
- * porque se tomaba como vela actual la mas a la derecha de las que el lector de pantalla encuentra por color: una
- * vela recien abierta (una raya), un doji, o una tapada por la linea de precio o por la marca de una operacion no
- * se detecta, y el recuadro saltaba a la anterior.
+ * El usuario: «soluciona lo de la vela actual, el seguimiento, porque a veces regresa a una anterior» y despues
+ * «lo amarillo que lo sigue tiene un desfase». Primero se tomaba como vela actual la mas a la derecha de las que
+ * el lector de pantalla encuentra por color: una vela recien abierta (una raya), un doji, o una tapada por el globo
+ * de resultado de la plataforma no se detecta, y el recuadro saltaba a la anterior.
  *
  * Ahora la vela actual NO se adivina. El bot da las velas exactas del par (precios); aqui se casan con las que se
  * ven en la pantalla (src/pricemap.js: una recta precio → fila, probando si la ultima vista es la que va en curso
- * o la ultima cerrada) y la vela actual se dibuja con los precios del bot:
- *   - si la pantalla SI la ve, en su sitio;
- *   - si no la ve, un paso a la derecha de la ultima cerrada (paso = separacion entre velas);
+ * o la ultima cerrada). Eso dice cual de las velas vistas es la ULTIMA CERRADA, y la vela actual va siempre en la
+ * casilla siguiente de la rejilla (un paso a la derecha; paso = separacion entre velas):
+ *   - si en esa casilla la pantalla ve una vela, el recuadro se dibuja con lo que se ve (coincide al pixel);
+ *   - si no ve nada ahi (recien abierta, o tapada), se dibuja con los precios del bot;
  *   - si en una lectura nada cuadra (algo tapa la grafica), se sostiene el ultimo dibujo unos segundos y despues
  *     se quita: nunca se marca una vela anterior.
- * Ademas (idea de Argon): mientras dura una misma vela, su posicion no puede retroceder.
+ *
+ * (La primera version ademas impedia que el recuadro retrocediera dentro de una misma vela. Medido en la pantalla
+ * del usuario: la plataforma recorre la grafica con una animacion al abrir cada vela, una lectura a media
+ * animacion daba una posicion corrida y esa regla la dejaba fija toda la vela. Ese era el desfase. Se quito.)
  */
 const { fitPriceMap } = require('./pricemap');
 
 const HOLD_MS = 4000; // cuanto se sostiene el ultimo dibujo si una lectura no cuadra
 const SHORT_FIT = 9; // segundo intento: solo las ultimas velas (un doji viejo que el lector se salto no estorba)
+const SNAP_PX = 4; // una vela vista a menos de esto de la casilla es la vela actual
 
 const median = (values) => {
   const sorted = [...values].sort((a, b) => a - b);
@@ -28,7 +33,7 @@ const median = (values) => {
 const merge = (list) => ({ open: list[0].open, close: list[list.length - 1].close, high: Math.max(...list.map((c) => c.high)), low: Math.min(...list.map((c) => c.low)) });
 /**
  * Las velas del bot (15 s) juntadas de `size` en `size`, como las pinta la plataforma con mas tiempo a la vista
- * (M10 = velas de 30 s). No se sabe en cual de las de 15 s empieza cada vela grande, asi que se dan todas las
+ * (velas de 30 s o de 1 min). No se sabe en cual de las de 15 s empieza cada vela grande, asi que se dan todas las
  * formas (`size` de ellas): `lead` = cuantas de 15 s ya cerradas forman parte de la vela grande en curso.
  */
 function widerBooks(book, size) {
@@ -55,13 +60,13 @@ function pitchOf(candles) {
  * @param {{candles:Array, book:{closed:Array, forming:object, openFor:number}|null, prev:object|null, now:number}} input
  *   candles = velas leidas de la pantalla (unidades de pantalla, x0/x1 en pixeles de la imagen);
  *   book = velas del bot en precios ({open, high, low, close}); prev = lo devuelto en `track` la vez anterior.
- * @returns {{marks:Array, current:object|null, track:object|null, exact:boolean}}
- *   current = { x0, x1, open, close, high, low, up } en unidades de pantalla; exact = dibujada con precios del bot.
+ * @returns {{marks:Array, current:object|null, track:object|null, exact:boolean, seconds?:number, debug?:object}}
+ *   current = { x0, x1, open, close, high, low, up } en unidades de pantalla; exact = ubicada con las velas del bot.
  */
 function trackZone({ candles, book, prev = null, now }) {
   const seen = candles || [];
   if (!book || !book.forming || !book.closed || book.closed.length < 6) {
-    // Sin velas del bot: lo de antes (la mas a la derecha), pero sin retroceder dentro de la misma lectura.
+    // Sin velas del bot: lo de antes (la mas a la derecha).
     const last = seen[seen.length - 1] || null;
     return { marks: seen.slice(0, -1), current: last ? { ...last, up: last.dir !== 'down' } : null, track: null, exact: false };
   }
@@ -72,9 +77,9 @@ function trackZone({ candles, book, prev = null, now }) {
     return f && f.valid ? f : null;
   };
   let used = book;
-  let fit = tryFit(book);
+  let fit = pitch > 0 ? tryFit(book) : null;
   // Las de 15 s no casan: la grafica puede estar pintando velas de 30 s o de 1 min.
-  for (const size of fit ? [] : [2, 4]) {
+  for (const size of fit || !(pitch > 0) ? [] : [2, 4]) {
     for (const alt of widerBooks(book, size)) {
       const f = tryFit(alt);
       if (f && (!fit || f.rms < fit.rms)) {
@@ -84,44 +89,49 @@ function trackZone({ candles, book, prev = null, now }) {
     }
     if (fit) break;
   }
-  // Cuando empezo la vela en curso (reloj local): para saber si sigue siendo la misma que en la lectura anterior.
-  const startedAt = now - (Number(book.openFor) || 0) * 1000;
-  const sameCandle = prev && Math.abs(prev.startedAt - startedAt) < 3000;
 
-  let geo = null;
+  let slot = null; // la casilla de la vela actual: { x0, x1 }
   let map = null;
-  let marks = seen;
-  if (fit && fit.valid && seen.length) {
-    const last = seen[seen.length - 1];
-    map = { A: fit.A, B: fit.B };
-    if (fit.shift === 1 && pitch > 0) {
-      // La pantalla no ve la vela en curso: va un paso a la derecha de la ultima cerrada.
-      geo = { x0: last.x0 + pitch, x1: last.x1 + pitch };
-    } else {
-      geo = { x0: last.x0, x1: last.x1 };
-      marks = seen.slice(0, -1);
+  let seconds = 15;
+  let lead = 0;
+  let forming = book.forming;
+  if (fit) {
+    // Cual de las vistas es la ultima cerrada del bot: con shift 0 la penultima, con +1 la ultima, con −1 la antepenultima.
+    const anchor = seen[seen.length - 2 + fit.shift];
+    if (anchor) {
+      const width = median(seen.slice(-12).map((c) => c.x1 - c.x0));
+      // La casilla que sigue a la ultima cerrada (dos mas alla si la pantalla ya va una vela adelante del bot).
+      const steps = fit.shift === -1 ? 2 : 1;
+      slot = { x0: anchor.x0 + pitch * steps, x1: anchor.x0 + pitch * steps + width };
+      map = { A: fit.A, B: fit.B };
+      seconds = used.seconds || 15;
+      lead = used.lead || 0;
+      forming = used.forming;
     }
-    // Dentro de la misma vela la posicion no retrocede (un salto atras de medio paso o mas es una lectura mala).
-    if (sameCandle && prev.geo && pitch > 0 && geo.x0 < prev.geo.x0 - pitch * 0.5) {
-      geo = prev.geo;
-      marks = seen.filter((c) => c.x1 < geo.x0);
-    }
-  } else if (prev && prev.geo && prev.map && now - prev.fitAt <= HOLD_MS) {
-    // Esta lectura no cuadra: se sostiene el ultimo sitio y la ultima recta.
-    geo = prev.geo; // la grafica se recorre sola: una vela nueva nace en el mismo sitio
-    map = prev.map;
-    marks = seen.filter((c) => c.x1 < geo.x0);
   }
-  if (!geo || !map) return { marks: seen.slice(0, -1), current: null, track: null, exact: false };
+  if (!slot && prev && prev.slot && prev.map && now - prev.fitAt <= HOLD_MS) {
+    // Esta lectura no cuadra: se sostiene la ultima casilla y la ultima recta (con la misma forma de juntar velas).
+    slot = prev.slot;
+    map = prev.map;
+    seconds = prev.seconds || 15;
+    lead = prev.lead || 0;
+    if (seconds !== 15) {
+      const again = widerBooks(book, seconds / 15).find((b) => b.lead === lead);
+      if (again) forming = again.forming;
+    }
+  }
+  if (!slot || !map) return { marks: seen.slice(0, -1), current: null, track: null, exact: false, seconds, debug: { shift: null, pitch, held: false } };
 
+  // Lo que la pantalla ve en esa casilla (si ve algo): con eso el recuadro coincide al pixel con la vela.
+  const here = seen.filter((c) => Math.abs(c.x0 - slot.x0) <= SNAP_PX || (c.x0 >= slot.x0 - SNAP_PX && c.x1 <= slot.x1 + SNAP_PX));
+  const visible = here.length ? here[here.length - 1] : null;
   const at = (price) => map.A + map.B * price;
-  // (si esta lectura no caso, se dibuja con la misma forma de juntar velas que la ultima vez)
-  const seconds = fit ? used.seconds || 15 : (prev && prev.seconds) || 15;
-  const again = !fit && seconds !== 15 ? widerBooks(book, seconds / 15).find((b) => b.lead === ((prev && prev.lead) || 0)) || null : null;
-  const f = (fit ? used : again || book).forming;
-  const current = { x0: geo.x0, x1: geo.x1, open: at(f.open), close: at(f.close), high: at(f.high), low: at(f.low), up: f.close >= f.open };
-  const fitAt = fit && fit.valid ? now : prev.fitAt;
-  return { marks, current, seconds, track: { geo, map, pitch: pitch || (prev && prev.pitch) || 0, fitAt, startedAt, seconds, lead: fit ? used.lead || 0 : (prev && prev.lead) || 0 }, exact: true };
+  const current = visible
+    ? { x0: visible.x0, x1: visible.x1, open: visible.open, close: visible.close, high: visible.high, low: visible.low, up: visible.dir !== 'down', seen: true }
+    : { x0: slot.x0, x1: slot.x1, open: at(forming.open), close: at(forming.close), high: at(forming.high), low: at(forming.low), up: forming.close >= forming.open, seen: false };
+  const marks = seen.filter((c) => c.x1 < slot.x0 - 1); // solo las cerradas (lo que quede a la derecha de la casilla es un globo o un aviso)
+  const debug = { shift: fit ? fit.shift : null, rms: fit ? fit.rms : null, n: fit ? fit.n : null, tolerance: fit ? fit.tolerance : null, pitch, held: !fit, seen: Boolean(visible) };
+  return { marks, current, seconds, debug, track: { slot, map, pitch: pitch || (prev && prev.pitch) || 0, fitAt: fit ? now : prev.fitAt, seconds, lead }, exact: true };
 }
 
 module.exports = { trackZone, pitchOf, widerBooks, HOLD_MS };
