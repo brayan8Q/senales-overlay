@@ -970,7 +970,7 @@ api.onState((s) => {
 
   // --- Zona ---
   const zone = $('zone');
-  if (s.region && !(s.multi && s.multi.enabled && s.multi.slots.some((slot) => slot.zone))) {
+  if (s.region && !(s.multi && s.multi.enabled && (s.multi.slots.some((slot) => slot.zone) || (s.multi.wall && s.multi.wall.open)))) {
     place(zone, s.region);
     zone.classList.remove('hidden');
   } else {

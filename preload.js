@@ -35,4 +35,7 @@ contextBridge.exposeInMainWorld('senales', {
   saveDebug: () => ipcRenderer.send('save-debug'),
   quit: () => ipcRenderer.send('quit'),
   onState: (callback) => ipcRenderer.on('state', (_event, state) => callback(state)),
+  // Las 4 graficas propias del panel (renderer/wall.html)
+  onWall: (callback) => ipcRenderer.on('wall-state', (_event, state) => callback(state)),
+  wallReady: () => ipcRenderer.send('wall-ready'),
 });

@@ -1,0 +1,21 @@
+/* Las 4 gráficas propias del panel (16 nov 2026) */
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: #0b1220; color: #e5e7eb; font-family: system-ui, "Segoe UI", sans-serif; display: flex; flex-direction: column; overflow: hidden; }
+#summary { flex: 0 0 auto; padding: 6px 12px; font-size: 12.5px; font-weight: 700; background: #111a2e; border-bottom: 1px solid rgba(148, 163, 184, .25); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.stale #summary { background: #7c2d12; }
+#grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 6px; padding: 6px; }
+.cell { min-width: 0; min-height: 0; display: flex; flex-direction: column; border: 2px solid rgba(56, 189, 248, .35); border-radius: 8px; background: #0f172a; overflow: hidden; }
+.cell.pick { border-color: #60a5fa; }
+.cell.open { border-color: #facc15; box-shadow: 0 0 14px rgba(250, 204, 21, .45); }
+.cell.win { border-color: #22c55e; box-shadow: 0 0 14px rgba(34, 197, 94, .5); }
+.cell.loss { border-color: #ef4444; box-shadow: 0 0 14px rgba(239, 68, 68, .5); }
+.head { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 5px 8px; background: #111a2e; }
+.title { font-size: 13.5px; font-weight: 900; letter-spacing: .3px; white-space: nowrap; }
+.status { font-size: 11.5px; font-weight: 700; padding: 1px 8px; border-radius: 5px; background: rgba(148, 163, 184, .16); color: #cbd5e1; }
+.status.up { background: #22c55e; color: #052e16; }
+.status.down { background: #ef4444; color: #450a0a; }
+.status.open { background: #facc15; color: #111827; }
+.status.win { background: #22c55e; color: #052e16; }
+.status.loss { background: #ef4444; color: #fff; }
+canvas { flex: 1 1 auto; min-height: 0; width: 100%; display: block; }

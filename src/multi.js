@@ -100,6 +100,7 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
     loggedAt: 0,
     restUntil: 0, // despues de cerrar una serie se analiza unos segundos antes de abrir otra
     books: new Map(), // por par: las velas que dio el bot en la ultima vuelta (para dibujar la vela actual en su zona)
+    trades: [], // las ultimas operaciones cerradas (para marcarlas en las graficas del panel)
     lostIn: null, // par donde se perdio la ultima entrada de la serie en curso: la martingala sale en otro
     lostAt: 0,
     nextAt: 0, // uno a uno: respiro entre un resultado y la entrada siguiente
@@ -175,6 +176,8 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
       order.state = 'open';
       order.amount = opened.amount;
       order.payout = opened.payout;
+      order.openPrice = Number(opened.open_price);
+      order.openedAt = now();
       record(`Q,${now()},abierta,${opened.id},${opened.open_price},${opened.payout},${opened.amount},${opened.open_ms - opened.sent_ms}`);
       done = await bot.result(opened.id, cfg.seconds);
       if (!done || !done.ok) throw new Error((done && done.error) || 'sin resultado del bot');
@@ -188,6 +191,7 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
     record(`Q,${now()},resultado,${done.result},${net},${done.close_price},${plain(best.name)},${level}`);
     state.order = null;
     state.last = { name: best.name, dir: order.dir, level, result: done.result, net, at: now() };
+    state.trades = [...state.trades, { name: best.name, dir: order.dir, level, result: done.result, net, openPrice: order.openPrice, closePrice: Number(done.close_price), openedAt: order.openedAt, at: now() }].slice(-40);
     state.nextAt = now() + (cfg.gapMs || 0);
     state.tally.net += net;
     state.seriesNet += net;
@@ -242,7 +246,10 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
         pick: state.pick,
         level: state.level,
         lostIn: state.level > 0 ? state.lostIn : null,
-        order: state.order ? { name: state.order.name, dir: state.order.dir, level: state.order.level, state: state.order.state, amount: state.order.amount || null } : null,
+        order: state.order
+          ? { name: state.order.name, dir: state.order.dir, level: state.order.level, state: state.order.state, amount: state.order.amount || null, openPrice: Number.isFinite(state.order.openPrice) ? state.order.openPrice : null, openedAt: state.order.openedAt || null }
+          : null,
+        trades: state.trades,
         last: state.last,
         note: state.note,
         tally: { ...state.tally },

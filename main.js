@@ -44,7 +44,6 @@ const { createBotBridge } = require('./src/botbridge');
 const { createMultiEngine, pairKey } = require('./src/multi');
 const { trackZone } = require('./src/zonetrack');
 const { reviewPairs } = require('./src/autopairs');
-const wallKit = require('./src/wall');
 
 // PREDECIR con la vela ya avanzada: true = esperar a que abra la vela siguiente y analizar ahi;
 // false = analizar y predecir al momento de pulsar. El usuario pidio quitar la espera (13 nov 2026).
@@ -587,6 +586,9 @@ function internalView(now, candles, pixelsOk) {
 /** Abre (oculta) la ventana con la terminal demo y se pone a escuchar su conexion. */
 function createVisor() {
   if (visor || !config.internalSource) return;
+  // Con las graficas propias no hace falta la terminal de prueba de Pocket: no se carga (el 16 nov su sitio dejo de
+  // aceptar conexiones desde este equipo por demasiadas cargas; cada reinicio del panel pedia la pagina otra vez).
+  if (config.multi && config.multiWall) return;
   try {
     visor = new BrowserWindow({
       width: 1180,
@@ -768,7 +770,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-16q ventana propia con las 4 graficas: el panel les cambia el par, las deja en velas de 15 s y pone sus zonas · 2026-11-16p confianza muy alta: solo a favor de la tendencia, con la vela ya avanzada y de su color (no entra recien abierta) · 2026-11-16o los pares se cambian solos cuando dejan de pagar el minimo y la zona dice que grafica poner · 2026-11-16n el recuadro de la vela actual ya no se desfasa (va en la casilla que sigue a la ultima cerrada) · no se aferra a un par donde acaba de perder · 2026-11-16m la vela actual tambien se sigue con la grafica en M10 (velas de 30 s) · 2026-11-16l la zona avisa si las velas de la pantalla no son de 15 s · 2026-11-16k la vela actual de cada zona se ubica con las velas del bot (ya no regresa a la anterior) · 2026-11-16j sin martingala y solo con confianza alta (5+ lecturas de ventaja) · 2026-11-16i uno a uno: 2 s de respiro entre un resultado y la entrada siguiente · marcador de varios pares a cero con Reiniciar · 2026-11-16h la martingala brinca a OTRO par · cada zona marca sus velas y sigue la vela actual · el marcador cuenta las operaciones de los pares · no se opera un par que pague menos de 90 % · 2026-11-16g cada par con su zona y su escaner en la pantalla (4 zonas en ajustes) · 2026-11-16f varios pares a la vez: el bot entra en el que tenga mejor lectura y busca la recuperacion entre todos · 2026-11-16e lecturas nuevas: MACD, volatilidad (ATR) y temporalidad mayor · lista de los pares que mas pagan ahora · 2026-11-16d el par de la grafica se reconoce solo (precio del eje contra los precios del bot) y el bot entra al pulsar PREDECIR en el par que tengas a la vista · 2026-11-16c con boton: PREDECIR contesta al instante, el escaner pasa siempre y el bot entra solo cuando pulsas (sin IA, sin vetos, sin martingala por su cuenta) · 2026-11-16b sin IA: el panel escanea y el bot opera solo con el seguimiento de la vela (color + milisegundos) · 2026-11-16a una sola IA (GPT-4.1 mini); el bot sigue el ritmo de la vela por su cuenta · 2026-11-15t la prediccion con IA arranca al INICIAR cada vela (no antes) y sale en cuanto contesta, dentro de esa vela · 2026-11-15s el haz del escaner pasa siempre (tambien mientras se espera la vela) · 2026-11-15r el analisis y la IA arrancan 2 s antes de cerrar la vela, siguen 1 s en la vela nueva y ahi sale la senal · 2026-11-15q letrero a la par de la vela (dice por que no entro en esta y cuando sale la proxima) · 2026-11-15p pago real del bot · la orden sale 150 ms antes de abrir la vela (entrada pegada a la apertura) · soporte y resistencia firmes · 2026-11-15o sin el reloj exacto de la vela no se predice (ni senal ni martingala a media vela) · 2026-11-15n la IA vuelve a contestar en las senales normales (plazo entero) y se le pregunta en el segundo 11.5 · 2026-11-15m la fuente interna (y con ella el reloj de la vela) ya no se suelta al abrir una operacion: solo tras 12 s sin cuadrar · 2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-16r las 4 graficas las dibuja el panel con las velas del bot (ya no se carga ninguna pagina de Pocket) · 2026-11-16q ventana propia con las 4 graficas: el panel les cambia el par, las deja en velas de 15 s y pone sus zonas · 2026-11-16p confianza muy alta: solo a favor de la tendencia, con la vela ya avanzada y de su color (no entra recien abierta) · 2026-11-16o los pares se cambian solos cuando dejan de pagar el minimo y la zona dice que grafica poner · 2026-11-16n el recuadro de la vela actual ya no se desfasa (va en la casilla que sigue a la ultima cerrada) · no se aferra a un par donde acaba de perder · 2026-11-16m la vela actual tambien se sigue con la grafica en M10 (velas de 30 s) · 2026-11-16l la zona avisa si las velas de la pantalla no son de 15 s · 2026-11-16k la vela actual de cada zona se ubica con las velas del bot (ya no regresa a la anterior) · 2026-11-16j sin martingala y solo con confianza alta (5+ lecturas de ventaja) · 2026-11-16i uno a uno: 2 s de respiro entre un resultado y la entrada siguiente · marcador de varios pares a cero con Reiniciar · 2026-11-16h la martingala brinca a OTRO par · cada zona marca sus velas y sigue la vela actual · el marcador cuenta las operaciones de los pares · no se opera un par que pague menos de 90 % · 2026-11-16g cada par con su zona y su escaner en la pantalla (4 zonas en ajustes) · 2026-11-16f varios pares a la vez: el bot entra en el que tenga mejor lectura y busca la recuperacion entre todos · 2026-11-16e lecturas nuevas: MACD, volatilidad (ATR) y temporalidad mayor · lista de los pares que mas pagan ahora · 2026-11-16d el par de la grafica se reconoce solo (precio del eje contra los precios del bot) y el bot entra al pulsar PREDECIR en el par que tengas a la vista · 2026-11-16c con boton: PREDECIR contesta al instante, el escaner pasa siempre y el bot entra solo cuando pulsas (sin IA, sin vetos, sin martingala por su cuenta) · 2026-11-16b sin IA: el panel escanea y el bot opera solo con el seguimiento de la vela (color + milisegundos) · 2026-11-16a una sola IA (GPT-4.1 mini); el bot sigue el ritmo de la vela por su cuenta · 2026-11-15t la prediccion con IA arranca al INICIAR cada vela (no antes) y sale en cuanto contesta, dentro de esa vela · 2026-11-15s el haz del escaner pasa siempre (tambien mientras se espera la vela) · 2026-11-15r el analisis y la IA arrancan 2 s antes de cerrar la vela, siguen 1 s en la vela nueva y ahi sale la senal · 2026-11-15q letrero a la par de la vela (dice por que no entro en esta y cuando sale la proxima) · 2026-11-15p pago real del bot · la orden sale 150 ms antes de abrir la vela (entrada pegada a la apertura) · soporte y resistencia firmes · 2026-11-15o sin el reloj exacto de la vela no se predice (ni senal ni martingala a media vela) · 2026-11-15n la IA vuelve a contestar en las senales normales (plazo entero) y se le pregunta en el segundo 11.5 · 2026-11-15m la fuente interna (y con ella el reloj de la vela) ya no se suelta al abrir una operacion: solo tras 12 s sin cuadrar · 2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -954,72 +956,44 @@ function restoreMultiTally() {
     /* sin registro de hoy: empieza en cero */
   }
 }
-// ---------- LAS 4 GRAFICAS DEL PANEL (16 nov 2026, ver src/wall.js) ----------
-// Ventana propia con cuatro vistas de la terminal de prueba publica de Pocket (sin cuenta): el panel les pone el par
-// de cada lugar, velas de 15 s y vista M10, las limpia de botones y calcula la zona del escaner de cada una. Si un
-// par se cambia solo por pagar poco, su grafica cambia con el. Cerrar la ventana = volver a las zonas marcadas a mano.
-let wall = null; // { win, views: [{ view, symbol, tries, note }] }
-let wallZones = [null, null, null, null];
-let wallBusy = false;
-const wallActive = () => Boolean(wall && wall.win && !wall.win.isDestroyed() && wall.win.isVisible() && !wall.win.isMinimized());
-/** Las zonas que valen ahora: las de las graficas del panel si estan abiertas; si no, las marcadas a mano. */
-const zonesNow = () => (wallActive() ? wallZones : config.multiZones);
+// ---------- LAS 4 GRAFICAS PROPIAS DEL PANEL (16 nov 2026, renderer/wall.html) ----------
+// El usuario: «tú puedes estarle cambiando las divisas… haz todo para que no deje de funcionar». Primero se probo
+// una ventana con cuatro terminales de prueba de Pocket: a los minutos su sitio dejo de aceptar conexiones desde
+// este equipo (demasiadas cargas) y quedaron en blanco. Ahora el panel DIBUJA sus cuatro graficas con las velas de
+// 15 s que el bot ya recibe: no se carga ninguna pagina del broker, los pares cambian al instante (son datos) y la
+// vela actual, la entrada del bot y el resultado se pintan exactos. Cerrar la ventana = volver a las zonas marcadas
+// a mano sobre la pestaña de Pocket.
+let wall = null;
+const wallOpen = () => Boolean(wall && !wall.isDestroyed());
+/** Las zonas del escaner sobre la pantalla: con las graficas propias abiertas no hace falta ninguna. */
+const zonesNow = () => (config.multiWall && wallOpen() ? [null, null, null, null] : config.multiZones);
+/** Por que «varios pares» no esta operando ('' = si opera). */
+const multiWhy = () =>
+  !config.multi || multiOn() ? '' : config.manual ? 'solo funciona en automático (quita el botón PREDECIR en ajustes)' : !config.autoTrade ? 'el bot está apagado en ajustes' : !config.multiPairs.some(Boolean) ? 'falta escribir los pares' : 'el bot no está abierto';
 function openWall() {
-  if (wall) return;
+  if (wallOpen()) return;
   try {
     const area = screen.getPrimaryDisplay().workArea;
-    const frame = new BrowserWindow({
+    wall = new BrowserWindow({
       x: area.x,
       y: area.y,
       width: Math.max(640, Math.min(area.width - 215, 1500)),
       height: area.height,
-      title: 'Lector · 4 gráficas (terminal de prueba de Pocket Option)',
+      title: 'Lector · 4 gráficas',
       autoHideMenuBar: true,
       backgroundColor: '#0b1220',
-      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+      webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
     });
-    const views = [0, 1, 2, 3].map((i) => {
-      // Cada grafica en su propia sesion: asi cada una recuerda SU par.
-      const view = new WebContentsView({ webPreferences: { partition: `persist:grafica-${i + 1}`, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
-      frame.contentView.addChildView(view);
-      view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-      // De una en una (cuatro a la vez dejaban dos en blanco) y, si una no carga, se vuelve a pedir.
-      const slot = { view, symbol: '', tries: { key: '', count: 0, at: 0 }, note: 'cargando', zoom: 1, askedAt: 0 };
-      const load = () => {
-        if (view.webContents.isDestroyed()) return;
-        slot.askedAt = Date.now();
-        view.webContents.loadURL(wallKit.URL).catch(() => {});
-      };
-      slot.load = load;
-      setTimeout(load, 300 + i * 3000);
-      view.webContents.on('did-finish-load', () => {
-        if (!view.webContents.isDestroyed()) view.webContents.setZoomFactor(slot.zoom);
-      });
-      return slot;
-    });
-    const layout = () => {
-      if (frame.isDestroyed()) return;
-      const [width, height] = frame.getContentSize();
-      wallKit.gridBounds(width, height).forEach((bounds, i) => {
-        views[i].view.setBounds(bounds);
-        views[i].zoom = wallKit.zoomFor(bounds);
-        if (!views[i].view.webContents.isDestroyed()) views[i].view.webContents.setZoomFactor(views[i].zoom);
-      });
-    };
-    layout();
-    frame.on('resize', layout);
-    frame.on('close', () => {
+    wall.loadFile(path.join(__dirname, 'renderer', 'wall.html'));
+    wall.on('close', () => {
       if (quitting) return;
       config.multiWall = false; // la cerro el usuario: se vuelve a las zonas marcadas a mano
       saveConfig();
     });
-    frame.on('closed', () => {
+    wall.on('closed', () => {
       wall = null;
-      wallZones = [null, null, null, null];
-      multiTrack = [null, null, null, null];
       publish();
     });
-    wall = { win: frame, views };
     record(`Q,${Date.now()},graficas,abiertas`);
   } catch (err) {
     wall = null;
@@ -1027,83 +1001,73 @@ function openWall() {
   }
 }
 function closeWall() {
-  if (!wall) return;
-  const closing = wall.win;
+  if (!wallOpen()) return;
+  const closing = wall;
   wall = null;
-  wallZones = [null, null, null, null];
   try {
     closing.destroy();
   } catch {
     /* ya estaba cerrada */
   }
 }
-/** Cada 4 s: cada grafica en su par, en velas de 15 s, y su zona al dia. */
-async function wallTick() {
-  if (wallBusy) return;
+/** Lo que se dibuja: por lugar, su par, sus velas, la lectura, la operacion abierta y las ya cerradas. */
+function wallState() {
+  const view = multi.view();
+  const rules = [
+    `${config.multiMinMargin}+ lecturas de ventaja`,
+    config.multiOnly.length ? config.multiOnly.join(' o ') : '',
+    config.multiMinAge ? `vela de ${config.multiMinAge} a ${config.multiMaxAge || 15} s` : '',
+    config.multiSameColor ? 'vela de su color' : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const now = Date.now();
+  return {
+    on: multiOn(),
+    why: multiWhy(),
+    pick: view.pick,
+    tally: view.tally,
+    minMargin: view.minMargin,
+    rules,
+    slots: config.multiPairs.map((name) => {
+      const key = pairKey(name);
+      const p = name ? view.pairs.find((x) => pairKey(x.name) === key) : null;
+      const book = name ? multi.book(name) : null;
+      const fresh = book && now - book.at < 6000 ? book : null;
+      return {
+        name,
+        payout: p ? p.payout : null,
+        found: Boolean(p),
+        ready: Boolean(p && p.ready && fresh),
+        dir: p ? p.dir : null,
+        margin: p ? p.margin : 0,
+        pattern: p ? p.pattern : null,
+        why: p ? p.why : '',
+        rest: p ? p.rest : 0,
+        openFor: fresh ? fresh.openFor + (now - fresh.at) / 1000 : null,
+        closed: fresh ? fresh.closed : [],
+        forming: fresh ? fresh.forming : null,
+        order: view.order && pairKey(view.order.name) === key ? view.order : null,
+        last: view.last && pairKey(view.last.name) === key ? view.last : null,
+        trades: view.trades.filter((t) => pairKey(t.name) === key),
+      };
+    }),
+  };
+}
+/** Dos veces por segundo: la ventana abierta si toca, y lo que hay que dibujar. */
+function wallTick() {
   if (!config.multi || !config.multiWall) {
-    if (wall) closeWall();
+    if (wallOpen()) closeWall();
     return;
   }
-  if (!wall) {
+  if (!wallOpen()) {
     openWall();
     return;
   }
-  wallBusy = true;
   try {
-    const frame = wall.win;
-    const content = frame.getContentBounds();
-    const active = wallActive();
-    const now = Date.now();
-    await Promise.all(
-      wall.views.map(async (slot, i) => {
-        const want = wallKit.symbolOf(config.multiPairs[i]);
-        const contents = slot.view.webContents;
-        if (contents.isDestroyed() || contents.isLoading() || !slot.askedAt) {
-          slot.note = 'cargando';
-          wallZones[i] = null;
-          if (slot.askedAt && now - slot.askedAt > 45000) slot.load(); // lleva mucho cargando: se pide otra vez
-          return;
-        }
-        if (Math.abs(contents.getZoomFactor() - slot.zoom) > 0.01) contents.setZoomFactor(slot.zoom);
-        let seen = null;
-        try {
-          seen = await contents.executeJavaScript(wallKit.SETUP_SCRIPT, true);
-        } catch {
-          seen = null;
-        }
-        if (!seen || !seen.ok) {
-          slot.note = (seen && seen.why) || 'cargando';
-          wallZones[i] = null;
-          if (now - slot.askedAt > 45000) slot.load(); // cargo pero sin grafica (pagina en blanco): otra vez
-          return;
-        }
-        slot.symbol = seen.symbol;
-        if (want && seen.symbol !== want) {
-          // Otro par: se le dice a la terminal y se recarga (como mucho 3 intentos por par, uno cada 12 s).
-          const same = slot.tries.key === want;
-          if (same && slot.tries.count >= 3) slot.note = `la terminal de prueba no tiene ${config.multiPairs[i]}`;
-          else if (!(same && now - slot.tries.at < 12000)) {
-            slot.tries = { key: want, count: same ? slot.tries.count + 1 : 1, at: now };
-            slot.note = 'cambiando de par';
-            record(`Q,${now},grafica,${i + 1},${seen.symbol || '?'} -> ${want}`);
-            slot.askedAt = now;
-            contents.executeJavaScript(wallKit.switchScript(want), true).catch(() => {});
-          }
-          wallZones[i] = null;
-          multiTrack[i] = null;
-          return;
-        }
-        slot.note = seen.inactive ? 'ese par está cerrado en la terminal de prueba' : seen.s15 ? '' : 'poniendo velas de 15 s';
-        const zone = active && want ? wallKit.zoneOf(content, slot.view.getBounds(), seen.canvas, slot.zoom) : null;
-        const before = wallZones[i];
-        wallZones[i] = zone;
-        if (zone && before && (zone.x !== before.x || zone.y !== before.y || zone.width !== before.width || zone.height !== before.height)) multiTrack[i] = null;
-      }),
-    );
+    wall.webContents.send('wall-state', wallState());
   } catch {
-    /* la ventana se cerro a media vuelta */
-  } finally {
-    wallBusy = false;
+    /* la ventana se esta cerrando */
   }
 }
 /** Por que el bot no opera ahora ('' = puede operar). */
@@ -1682,9 +1646,9 @@ function publish(statusOverride) {
     multi: {
       ...multi.view(),
       enabled: config.multi,
-      why: config.multi && !multiOn() ? (config.manual ? 'solo funciona en automático (quita el botón PREDECIR en ajustes)' : !config.autoTrade ? 'el bot está apagado en ajustes' : !config.multiPairs.some(Boolean) ? 'falta escribir los pares' : 'el bot no está abierto') : '',
-      slots: config.multiPairs.map((name, i) => ({ name, key: pairKey(name), zone: zonesNow()[i], scan: zonesNow()[i] ? multiScan[i] : null, swap: pairSwaps[i], chart: wall ? wall.views[i].note : null })),
-      wall: { on: config.multiWall, open: Boolean(wall), active: wallActive() },
+      why: multiWhy(),
+      slots: config.multiPairs.map((name, i) => ({ name, key: pairKey(name), zone: zonesNow()[i], scan: zonesNow()[i] ? multiScan[i] : null, swap: pairSwaps[i] })),
+      wall: { on: config.multiWall, open: wallOpen() },
     },
     // Dos etapas: mientras se espera la entrada del usuario, cuanto le queda; y si ya entro, hace cuanto.
     entryWait: last.entryWait || null,
@@ -2582,9 +2546,10 @@ ipcMain.on('set-multi', (_e, value) => {
 ipcMain.on('set-multi-wall', (_e, value) => {
   config.multiWall = Boolean(value);
   saveConfig();
-  wallTick().catch(() => {});
+  wallTick();
   publish();
 });
+ipcMain.on('wall-ready', () => wallTick());
 ipcMain.on('set-multi-pair', (_e, index, value) => {
   const i = Math.round(Number(index));
   if (!(i >= 0 && i < 4)) return;
@@ -2771,8 +2736,7 @@ if (!app.requestSingleInstanceLock()) {
     setInterval(refreshTopPayouts, 5000);
     setInterval(() => multi.tick().catch(() => {}), 1000);
     setInterval(() => multiScanTick().catch(() => {}), 350);
-    setInterval(() => wallTick().catch(() => {}), 4000);
-    setTimeout(() => wallTick().catch(() => {}), 2500);
+    setInterval(wallTick, 500);
     // Estado del bot de Pocket (si esta abierto). Cada cambio queda en el registro:
     //   O,ms,bot,disponible|no disponible,saldo,motivo
     setInterval(() => {
