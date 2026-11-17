@@ -449,6 +449,33 @@ function clockText(ms) {
 }
 
 /** Barra: durante el análisis avanza por pasos; durante la señal se vacía hasta calificarla. */
+/** Lo leído de la pantalla en una zona: un recuadro por vela y la vela actual al detalle (como en la zona de siempre). */
+function renderZoneCandles(el, scan, pair) {
+  const [, marks, wick, body, open, now, info] = el.children;
+  const px = (node, box) => {
+    for (const [k, v] of Object.entries(box)) node.style[k] = `${v}px`;
+    node.style.display = '';
+  };
+  const cur = scan && scan.current;
+  const list = scan ? scan.candles.slice(0, -1) : []; // la vela actual lleva su propio seguimiento
+  while (marks.children.length > list.length) marks.removeChild(marks.lastChild);
+  while (marks.children.length < list.length) marks.appendChild(Object.assign(document.createElement('div'), { className: 'mmark' }));
+  list.forEach((c, i) => px(marks.children[i], { left: c.x - 2, width: c.w + 4, top: c.y - 2, height: c.h + 4 }));
+  if (!cur) {
+    for (const node of [wick, body, open, now, info]) node.style.display = 'none';
+    return;
+  }
+  const center = cur.x + cur.w / 2;
+  px(body, { left: cur.x - 1, width: cur.w + 2, top: cur.bodyTop - 1, height: Math.max(3, cur.bodyBottom - cur.bodyTop) + 2 });
+  px(wick, { left: center - 1, top: cur.high, height: Math.max(0, cur.low - cur.high) });
+  px(open, { left: cur.x - 8, width: cur.w + 22, top: cur.open - 1 });
+  px(now, { left: cur.x - 8, width: cur.w + 40, top: cur.price - 1 });
+  now.className = `mnow ${cur.up ? 'up' : 'down'}`;
+  px(info, { left: center, top: Math.max(34, cur.high - 8) });
+  const secs = pair && Number.isFinite(pair.openFor) ? ` · vela de 15 s del bot: va en ${Math.max(0, Math.min(15, Math.round(pair.openFor)))}` : '';
+  info.textContent = `vela actual: ${cur.up ? 'verde' : 'roja'}${secs}`;
+}
+
 /** Varios pares a la vez: cada gráfica con su marco, su haz y un letrero con la lectura de su par. */
 function renderMultiZones(s) {
   const mu = s.multi;
@@ -463,7 +490,8 @@ function renderMultiZones(s) {
   while (box.children.length < 4) {
     const el = document.createElement('div');
     el.className = 'mzone hidden';
-    el.append(Object.assign(document.createElement('div'), { className: 'mbeam' }), Object.assign(document.createElement('div'), { className: 'mlabel' }));
+    // Orden fijo: haz, recuadros de las velas, vela actual (cuerpo, mechas, apertura, precio, rótulo) y, al final, el letrero.
+    for (const cls of ['mbeam', 'mmarks', 'mwick', 'mbody', 'mopen', 'mnow', 'minfo', 'mlabel']) el.append(Object.assign(document.createElement('div'), { className: cls }));
     box.appendChild(el);
   }
   if (!show) for (const el of Array.from(box.children)) el.classList.add('hidden');
@@ -497,7 +525,10 @@ function renderMultiZones(s) {
       text += ' · el bot no tiene ese par (revisa el nombre)';
     } else if (!p.ready) text += ' · juntando velas';
     else if (p.stale) text += ' · sin precio';
-    else if (p.dir) {
+    else if (p.payout && mu.minPayout && p.payout < mu.minPayout) {
+      cls += ' off';
+      text += ` · ahora paga ${p.payout} %: aquí no entro (mínimo ${mu.minPayout} %)`;
+    } else if (p.dir) {
       tone = p.dir;
       if (mu.pick === p.name) cls += ' pick';
       text += ` · ${arrow[p.dir]} · ${p.margin} de ventaja · ${p.pattern}${p.payout ? ` · paga ${p.payout} %` : ''}`;
@@ -505,6 +536,7 @@ function renderMultiZones(s) {
     el.className = cls;
     label.className = `mlabel${tone && !o ? ` ${tone}` : ''}`;
     label.textContent = text;
+    renderZoneCandles(el, slot.scan, p);
   });
 }
 
@@ -782,6 +814,21 @@ api.onState((s) => {
     add('mf', `${lastText}Lleva ${t.wins} G / ${t.losses} P / ${t.ties} E · neto ${t.net >= 0 ? '+' : ''}${t.net.toFixed(2)}${t.lost ? ` · series perdidas ${t.lost}` : ''}${mu.note ? ` · ${mu.note}` : ''}`);
   }
 
+  // Con varios pares, el cuadro grande de la señal dice lo que hace el bot (no la lectura de la gráfica única).
+  if (mu && mu.on) {
+    const o = mu.order;
+    $('signal').className = o ? o.dir : 'analysis';
+    $('signal-label').className = '';
+    $('signal-label').textContent = o ? `${o.level ? `MARTIN ${o.level} ` : ''}${o.dir === 'up' ? 'ARRIBA ▲' : 'ABAJO ▼'}` : mu.level ? `BUSCANDO MARTINGALA ${mu.level}` : 'ANALIZANDO';
+    $('signal-detail').textContent = o
+      ? `El bot entró en ${o.name}${o.amount ? ` con $${Number(o.amount).toFixed(2)}` : ''}.`
+      : mu.level && mu.lostIn
+        ? `Perdió en ${mu.lostIn}: busco la recuperación en los otros pares.`
+        : mu.note || `Leyendo los ${mu.pairs.length} pares a la vez.`;
+    $('signal-source').textContent = '';
+    for (const id of ['signal-pct', 'signal-pct-note', 'signal-entry', 'signal-follow']) $(id).classList.add('hidden');
+  }
+
   // --- Bot en DEMO: disponible, en pausa (y por qué) o qué hizo con la orden de esta señal ---
   const botChip = $('bot-chip');
   const b = s.bot;
@@ -836,7 +883,7 @@ api.onState((s) => {
   if (held) $('candle-line').textContent = `Vela que cambió de color: frenó ${held} · habrían ganado ${cc.wins}, perdido ${cc.losses}`;
 
   // --- Aviso si algo impide leer la gráfica ---
-  const problem = !/^Leyendo /.test(s.status);
+  const problem = !/^Leyendo /.test(s.status) && !(s.multi && s.multi.on); // con varios pares, los avisos de la gráfica única no aplican
   $('problem').classList.toggle('hidden', !problem);
   $('problem').textContent = s.status;
 

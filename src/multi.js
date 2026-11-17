@@ -8,7 +8,8 @@
  *
  * En cada vuelta: se lee cada par, se escoge el que tiene más lecturas de acuerdo y ahí entra el bot (DEMO).
  * Si pierde, la martingala se busca otra vez entre TODOS los pares: sale en el que tenga la mejor lectura en ese
- * momento, sea el mismo u otro. Un empate repite el monto (no corta la serie).
+ * momento, pero en OTRO par: «cuando pierda en uno se brinca en otro lado» (si en 6 s ningun otro par tiene la
+ * ventaja pedida, vale el que tenga un lado aunque sea por una lectura). Un empate repite el monto.
  *
  * Medido ese dia con estas mismas reglas sobre 59 pares grabados (115,766 casos): 49.9 % y 50.0 % en las dos
  * mitades; escoger par no sube el acierto, da mas entradas y deja buscar la recuperacion en otro par.
@@ -79,6 +80,8 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
     tally: { wins: 0, losses: 0, ties: 0, net: 0, series: 0, lost: 0 },
     loggedAt: 0,
     restUntil: 0, // despues de cerrar una serie se analiza unos segundos antes de abrir otra
+    lostIn: null, // par donde se perdio la ultima entrada de la serie en curso: la martingala sale en otro
+    lostAt: 0,
   };
 
   async function tick() {
@@ -94,8 +97,14 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
       const answer = await bot.candles(cfg.pairs);
       if (!answer || !answer.ok) throw new Error((answer && answer.error) || 'el bot no dio las velas');
       const time = new Date(now());
-      state.reads = answer.pairs.map(([symbol, name, payout, closed, forming, age]) => ({ symbol, name, payout, age, candles: closed.length, read: readPair({ closed, forming, time, asset: name }) }));
-      const best = pickBest(state.reads, cfg);
+      state.reads = answer.pairs.map(([symbol, name, payout, closed, forming, age, openFor]) => ({
+        symbol, name, payout, age, candles: closed.length, openFor, up: forming[3] >= forming[0], read: readPair({ closed, forming, time, asset: name }),
+      }));
+      // Despues de perder, la recuperacion se busca en los OTROS pares (si hay mas de uno).
+      const jump = state.level > 0 && state.lostIn && state.reads.length > 1;
+      const field = jump ? state.reads.filter((r) => r.name !== state.lostIn) : state.reads;
+      let best = pickBest(field, cfg);
+      if (!best && jump && now() - state.lostAt >= 6000) best = pickBest(field, { ...cfg, minMargin: 1 });
       state.pick = best ? best.name : null;
       if (now() - state.loggedAt >= 5000 || best) {
         state.loggedAt = now();
@@ -152,6 +161,7 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
       if (how === 'perdida') state.tally.lost++;
       state.level = 0;
       state.seriesNet = 0;
+      state.lostIn = null;
       state.restUntil = now() + (cfg.restMs || 0);
     };
     if (done.result === 'win') {
@@ -159,6 +169,8 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
       endSeries('ganada');
     } else if (done.result === 'loss') {
       state.tally.losses++;
+      state.lostIn = best.name;
+      state.lostAt = now();
       if (level >= cfg.levels) endSeries('perdida');
       else state.level = level + 1; // la recuperacion se busca en la vuelta siguiente, en el par que mejor lectura tenga
     } else {
@@ -168,14 +180,20 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
 
   return {
     tick,
+    /** Al abrir el panel: la cuenta del dia sigue donde iba (se lee del registro). */
+    restore(tally) {
+      for (const key of Object.keys(state.tally)) if (Number.isFinite(tally[key])) state.tally[key] = tally[key];
+    },
     /** Para pintar en el panel. */
     view() {
       const cfg = settings();
       return {
         on: Boolean(cfg.on),
-        pairs: state.reads.map((r) => ({ name: r.name, payout: r.payout, dir: r.read ? r.read.dir : null, margin: r.read ? r.read.margin : 0, pattern: r.read ? r.read.pattern : null, ready: Boolean(r.read), stale: r.age > STALE_S })),
+        minPayout: cfg.minPayout || 0,
+        pairs: state.reads.map((r) => ({ name: r.name, payout: r.payout, dir: r.read ? r.read.dir : null, margin: r.read ? r.read.margin : 0, pattern: r.read ? r.read.pattern : null, ready: Boolean(r.read), stale: r.age > STALE_S, openFor: r.openFor, up: r.up })),
         pick: state.pick,
         level: state.level,
+        lostIn: state.level > 0 ? state.lostIn : null,
         order: state.order ? { name: state.order.name, dir: state.order.dir, level: state.order.level, state: state.order.state, amount: state.order.amount || null } : null,
         last: state.last,
         note: state.note,
