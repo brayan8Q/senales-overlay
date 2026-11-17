@@ -64,7 +64,7 @@ function pickBest(reads, { minMargin = 2, minPayout = 80, avoid = [] } = {}) {
 /**
  * El motor: una operacion a la vez, la serie (senal + martingalas) se lleva entre todos los pares.
  * @param {{bot:object, record:Function, settings:Function, now?:Function}} deps
- *   settings() → { on, pairs:string[], seconds, levels, minMargin, minPayout, avoid:string[], restMs }
+ *   settings() → { on, pairs:string[], seconds, levels, minMargin, minPayout, avoid:string[], restMs, gapMs }
  */
 function createMultiEngine({ bot, record, settings, now = Date.now }) {
   const plain = (text) => String(text || '').replace(/[,\r\n]+/g, ' ').slice(0, 160);
@@ -82,6 +82,7 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
     restUntil: 0, // despues de cerrar una serie se analiza unos segundos antes de abrir otra
     lostIn: null, // par donde se perdio la ultima entrada de la serie en curso: la martingala sale en otro
     lostAt: 0,
+    nextAt: 0, // uno a uno: respiro entre un resultado y la entrada siguiente
   };
 
   async function tick() {
@@ -113,6 +114,10 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
       if (!best) {
         const missing = state.reads.filter((r) => !r.read).length;
         state.note = !state.reads.length ? 'el bot no tiene precio de esos pares' : missing === state.reads.length ? 'juntando velas de los pares' : 'ningún par con lectura clara';
+        return;
+      }
+      if (now() < state.nextAt) {
+        state.note = '';
         return;
       }
       if (state.level === 0 && now() < state.restUntil) {
@@ -153,6 +158,7 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
     record(`Q,${now()},resultado,${done.result},${net},${done.close_price},${plain(best.name)},${level}`);
     state.order = null;
     state.last = { name: best.name, dir: order.dir, level, result: done.result, net, at: now() };
+    state.nextAt = now() + (cfg.gapMs || 0);
     state.tally.net += net;
     state.seriesNet += net;
     const endSeries = (how) => {
@@ -180,6 +186,11 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
 
   return {
     tick,
+    /** Marcador a cero (la serie en curso sigue). */
+    reset() {
+      for (const key of Object.keys(state.tally)) state.tally[key] = 0;
+      state.last = null;
+    },
     /** Al abrir el panel: la cuenta del dia sigue donde iba (se lee del registro). */
     restore(tally) {
       for (const key of Object.keys(state.tally)) if (Number.isFinite(tally[key])) state.tally[key] = tally[key];

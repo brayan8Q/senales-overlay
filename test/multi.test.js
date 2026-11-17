@@ -121,3 +121,28 @@ test('despues de perder, la martingala sale en OTRO par aunque el que perdio ten
   assert.deepStrictEqual(orders, ['AAA OTC', 'BBB OTC', 'AAA OTC']);
   assert.strictEqual(engine.view().lostIn, null);
 });
+
+test('uno a uno: entre un resultado y la entrada siguiente hay un respiro; el marcador se puede poner a cero', async () => {
+  const strong = staircase(MIN_CANDLES + 30, 0.01);
+  const books = { 'AAA OTC': strong, 'BBB OTC': strong };
+  const orders = [];
+  let clock = 9000000;
+  const bot = {
+    candles: async (pairs) => ({ ok: true, seconds: 15, pairs: pairs.map((name) => [name, name, 92, books[name].slice(0, -1), books[name][books[name].length - 1], 0.3, 4]) }),
+    order: async (payload) => { orders.push(payload.asset); return { ok: true, id: 'x', open_price: 1, payout: 92, amount: 1, open_ms: clock, sent_ms: clock }; },
+    result: async () => ({ ok: true, result: 'loss', net: -1, close_price: 1 }),
+  };
+  const engine = createMultiEngine({ bot, record: () => {}, settings: () => ({ on: true, pairs: Object.keys(books), seconds: 3, levels: 4, minMargin: 1, minPayout: 80, avoid: [], restMs: 0, gapMs: 2000 }), now: () => clock });
+  await engine.tick();
+  assert.strictEqual(orders.length, 1);
+  clock += 1000;
+  await engine.tick(); // todavia no: va 1 s del resultado
+  assert.strictEqual(orders.length, 1);
+  clock += 1100;
+  await engine.tick();
+  assert.deepStrictEqual(orders, ['AAA OTC', 'BBB OTC']);
+  assert.strictEqual(engine.view().tally.losses, 2);
+  engine.reset();
+  assert.deepStrictEqual(engine.view().tally, { wins: 0, losses: 0, ties: 0, net: 0, series: 0, lost: 0 });
+  assert.strictEqual(engine.view().level, 2); // la serie en curso sigue
+});
