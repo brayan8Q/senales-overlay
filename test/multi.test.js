@@ -188,3 +188,30 @@ test('confianza muy alta: no entra con la vela recien abierta, ni contra su colo
   assert.strictEqual(pickBest([{ ...base, openFor: 1 }], rules), null);
   assert.strictEqual(blockReason(base, {}), ''); // sin reglas nuevas, como antes
 });
+
+test('con una operacion abierta las graficas siguen recibiendo velas, pero no se abre otra', async () => {
+  const strong = staircase(MIN_CANDLES + 30, 0.01);
+  let asked = 0;
+  let release;
+  const waiting = new Promise((resolve) => { release = resolve; });
+  const orders = [];
+  const bot = {
+    candles: async (pairs) => { asked++; return { ok: true, seconds: 15, pairs: pairs.map((name) => [name, name, 92, strong.slice(0, -1), strong[strong.length - 1], 0.3, 4 + asked]) }; },
+    order: async (payload) => { orders.push(payload.asset); return { ok: true, id: 'x', open_price: 1.5, payout: 92, amount: 1, open_ms: 1, sent_ms: 0 }; },
+    result: async () => { await waiting; return { ok: true, result: 'win', net: 0.92, close_price: 1.6 }; },
+  };
+  const engine = createMultiEngine({ bot, record: () => {}, settings: () => ({ on: true, pairs: ['AAA OTC'], seconds: 3, levels: 0, minMargin: 1, minPayout: 80, avoid: [], restMs: 0, gapMs: 0 }) });
+  const first = engine.tick(); // abre la operacion y se queda esperando el resultado
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.strictEqual(orders.length, 1);
+  assert.strictEqual(engine.view().order.openPrice, 1.5);
+  const before = engine.book('AAA OTC').openFor;
+  await engine.tick(); // operacion abierta: solo se refrescan las velas
+  assert.strictEqual(orders.length, 1);
+  assert.ok(engine.book('AAA OTC').openFor > before);
+  release();
+  await first;
+  assert.strictEqual(engine.view().trades.length, 1);
+  assert.strictEqual(engine.view().trades[0].openPrice, 1.5);
+  assert.strictEqual(engine.view().trades[0].closePrice, 1.6);
+});

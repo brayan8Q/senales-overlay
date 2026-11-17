@@ -138,7 +138,8 @@ function drawChart(cell, slot, now) {
   ctx.shadowBlur = 8;
   ctx.strokeRect(lx - body / 2 - 3, ly0 - 3, body + 6, Math.max(6, ly1 - ly0 + 6));
   ctx.shadowBlur = 0;
-  const elapsed = Math.max(0, Math.min(15, (Number(slot.openFor) || 0) + (now - stateAt) / 1000));
+  // Lo que lleva abierta la vela (si el dato viene con un par de segundos de retraso y ya pasó de 15, es que abrió otra).
+  const elapsed = Math.max(0, ((Number(slot.openFor) || 0) + (now - stateAt) / 1000) % 15);
   const clockY = height - 20;
   ctx.fillStyle = 'rgba(148,163,184,.25)';
   ctx.fillRect(lx - 22, clockY, 44, 4);

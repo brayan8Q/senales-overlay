@@ -108,6 +108,9 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
     streak: { name: null, losses: 0 }, // perdidas seguidas en el mismo par
   };
 
+  /** Las velas de cada par tal como las dio el bot, listas para dibujar. */
+  const booksOf = (answer) => new Map(answer.pairs.map(([, name, , closed, forming, , openFor]) => [pairKey(name), { closed: closed.slice(-64).map(toCandle), forming: toCandle(forming), openFor, at: now() }]));
+
   async function tick() {
     const cfg = settings();
     if (!cfg.on) {
@@ -115,13 +118,27 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
       state.reads = [];
       return;
     }
-    if (state.busy) return;
+    if (state.busy) {
+      // Con una operacion abierta no se decide nada, pero las graficas siguen recibiendo sus velas.
+      if (!state.pulling) {
+        state.pulling = true;
+        try {
+          const live = await bot.candles(cfg.pairs);
+          if (live && live.ok) state.books = booksOf(live);
+        } catch {
+          /* se intenta en la vuelta siguiente */
+        } finally {
+          state.pulling = false;
+        }
+      }
+      return;
+    }
     state.busy = true;
     try {
       const answer = await bot.candles(cfg.pairs);
       if (!answer || !answer.ok) throw new Error((answer && answer.error) || 'el bot no dio las velas');
       const time = new Date(now());
-      state.books = new Map(answer.pairs.map(([, name, , closed, forming, , openFor]) => [pairKey(name), { closed: closed.slice(-64).map(toCandle), forming: toCandle(forming), openFor, at: now() }]));
+      state.books = booksOf(answer);
       state.reads = answer.pairs.map(([symbol, name, payout, closed, forming, age, openFor]) => ({
         symbol, name, payout, age, candles: closed.length, openFor, up: forming[3] >= forming[0],
         color: forming[3] > forming[0] ? 'up' : forming[3] < forming[0] ? 'down' : 'flat',
