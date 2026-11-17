@@ -463,6 +463,11 @@ function renderZoneCandles(el, scan, pair) {
   list.forEach((c, i) => px(marks.children[i], { left: c.x - 2, width: c.w + 4, top: c.y - 2, height: c.h + 4 }));
   if (!cur) {
     for (const node of [wick, body, open, now, info]) node.style.display = 'none';
+    if (scan && scan.misfit) {
+      // Hay velas a la vista pero no son las de 15 s que lee el bot: se dice cómo arreglarlo.
+      px(info, { left: el.clientWidth / 2, top: el.clientHeight / 2 });
+      info.textContent = 'Estas velas no son de 15 s (o es otro par): pon esta gráfica en M3';
+    }
     return;
   }
   const center = cur.x + cur.w / 2;
