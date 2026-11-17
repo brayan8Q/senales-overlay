@@ -49,7 +49,9 @@ function place(el, r) {
 function rectFrom(a, b) {
   return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(a.x - b.x), height: Math.abs(a.y - b.y) };
 }
-function startSelect() {
+let selTarget = null; // null = la zona de siempre; 0-3 = la zona de esa gráfica (varios pares a la vez)
+function startSelect(target = null) {
+  selTarget = Number.isInteger(target) ? target : null;
   selecting = true;
   selStart = null;
   selRect.classList.add('hidden');
@@ -75,7 +77,10 @@ selector.addEventListener('mouseup', (e) => {
   if (!selStart || !selecting) return;
   const r = rectFrom(selStart, { x: e.clientX, y: e.clientY });
   endSelect();
-  if (r.width >= 60 && r.height >= 40) api.setRegion(r);
+  if (r.width >= 60 && r.height >= 40) {
+    if (selTarget === null) api.setRegion(r);
+    else api.setMultiZone(selTarget, r);
+  }
 });
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && selecting) endSelect();
@@ -113,7 +118,12 @@ $('btn-details').addEventListener('click', () => {
 });
 applyCompact();
 $('btn-settings').addEventListener('click', () => showSettings(!settingsOpen));
-$('btn-zone').addEventListener('click', startSelect);
+$('btn-zone').addEventListener('click', () => startSelect(null));
+// Varios pares a la vez: encender, y la zona y el par de cada gráfica.
+$('multi-on').addEventListener('change', (e) => api.setMulti(e.target.checked));
+for (const b of document.querySelectorAll('.mz-btn')) b.addEventListener('click', () => startSelect(Number(b.dataset.i)));
+for (const b of document.querySelectorAll('.mz-clear')) b.addEventListener('click', () => api.setMultiZone(Number(b.dataset.i), null));
+for (const input of document.querySelectorAll('.mz-pair')) input.addEventListener('change', () => api.setMultiPair(Number(input.dataset.i), input.value));
 $('btn-auto').addEventListener('click', () => api.toggleAuto());
 $('btn-reset').addEventListener('click', () => api.reset());
 $('btn-debug').addEventListener('click', () => api.saveDebug());
@@ -439,6 +449,65 @@ function clockText(ms) {
 }
 
 /** Barra: durante el análisis avanza por pasos; durante la señal se vacía hasta calificarla. */
+/** Varios pares a la vez: cada gráfica con su marco, su haz y un letrero con la lectura de su par. */
+function renderMultiZones(s) {
+  const mu = s.multi;
+  const slots = mu ? mu.slots : [];
+  $('multi-on').checked = Boolean(mu && mu.enabled);
+  document.querySelectorAll('.mz-pair').forEach((input, i) => {
+    if (document.activeElement !== input) input.value = slots[i] ? slots[i].name : '';
+  });
+  document.querySelectorAll('.mz-btn').forEach((b, i) => b.classList.toggle('set', Boolean(slots[i] && slots[i].zone)));
+  const box = $('mzones');
+  const show = Boolean(mu && mu.enabled) && !selecting;
+  while (box.children.length < 4) {
+    const el = document.createElement('div');
+    el.className = 'mzone hidden';
+    el.append(Object.assign(document.createElement('div'), { className: 'mbeam' }), Object.assign(document.createElement('div'), { className: 'mlabel' }));
+    box.appendChild(el);
+  }
+  if (!show) for (const el of Array.from(box.children)) el.classList.add('hidden');
+  const arrow = { up: '▲ ARRIBA', down: '▼ ABAJO' };
+  const key = (name) => String(name || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  slots.forEach((slot, i) => {
+    const el = box.children[i];
+    if (!show || !slot.zone) return el.classList.add('hidden');
+    place(el, slot.zone);
+    const label = el.lastChild;
+    const p = mu.pairs.find((x) => key(x.name) === slot.key);
+    const o = mu.order && key(mu.order.name) === slot.key ? mu.order : null;
+    const last = mu.last && key(mu.last.name) === slot.key && Date.now() - mu.last.at < 3500 ? mu.last : null;
+    let cls = 'mzone';
+    let text = `${i + 1} · ${slot.name || 'sin par'}`;
+    let tone = '';
+    if (!mu.on) {
+      cls += ' off';
+      text += ` · en espera: ${mu.why || 'apagado'}`;
+    } else if (!slot.name) {
+      cls += ' off';
+      text += ' · escribe el par en ajustes';
+    } else if (o) {
+      cls += ' open';
+      text += ` · EL BOT ENTRÓ ${o.dir === 'up' ? '▲' : '▼'}${o.amount ? ` $${Number(o.amount).toFixed(2)}` : ''}${o.level ? ` · martingala ${o.level}` : ''}`;
+    } else if (last) {
+      cls += last.result === 'win' ? ' win' : last.result === 'loss' ? ' loss' : '';
+      text += ` · ${last.result === 'win' ? 'GANÓ' : last.result === 'loss' ? 'PERDIÓ' : 'EMPATE'} ${last.net >= 0 ? '+' : ''}${Number(last.net).toFixed(2)}`;
+    } else if (!p) {
+      cls += ' off';
+      text += ' · el bot no tiene ese par (revisa el nombre)';
+    } else if (!p.ready) text += ' · juntando velas';
+    else if (p.stale) text += ' · sin precio';
+    else if (p.dir) {
+      tone = p.dir;
+      if (mu.pick === p.name) cls += ' pick';
+      text += ` · ${arrow[p.dir]} · ${p.margin} de ventaja · ${p.pattern}${p.payout ? ` · paga ${p.payout} %` : ''}`;
+    } else text += ' · sin lado claro';
+    el.className = cls;
+    label.className = `mlabel${tone && !o ? ` ${tone}` : ''}`;
+    label.textContent = text;
+  });
+}
+
 function renderProgress(s) {
   const bar = $('progress');
   const timed = s.cycleSeconds > 0;
@@ -828,9 +897,12 @@ api.onState((s) => {
   $('sc-instant').classList.toggle('hidden', !showFast);
   if (showFast) $('sc-instant').textContent = `Reglas al instante: ${fast.wins} de ${fastCount} (${fast.hitRate} %)`;
 
+  // --- Varios pares a la vez: ajustes, y el marco con escáner de cada gráfica ---
+  renderMultiZones(s);
+
   // --- Zona ---
   const zone = $('zone');
-  if (s.region) {
+  if (s.region && !(s.multi && s.multi.enabled && s.multi.slots.some((slot) => slot.zone))) {
     place(zone, s.region);
     zone.classList.remove('hidden');
   } else {

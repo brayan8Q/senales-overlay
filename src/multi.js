@@ -23,6 +23,8 @@ const { patternOf } = require('./formations');
 const MIN_CANDLES = 40; // con menos velas faltan MACD, volatilidad y temporalidad mayor
 const STALE_S = 3; // un par sin precio nuevo en 3 s no se toca
 const toCandle = (c) => ({ open: c[0], high: c[1], low: c[2], close: c[3] });
+/** «USD/BRL OTC», «usd brl otc» y «USDBRL_otc» son el mismo par. */
+const pairKey = (name) => String(name || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 /**
  * Lo que dice el panel de un par.
@@ -141,7 +143,7 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
     const net = Number(done.net) || 0;
     record(`Q,${now()},resultado,${done.result},${net},${done.close_price},${plain(best.name)},${level}`);
     state.order = null;
-    state.last = { name: best.name, dir: order.dir, level, result: done.result, net };
+    state.last = { name: best.name, dir: order.dir, level, result: done.result, net, at: now() };
     state.tally.net += net;
     state.seriesNet += net;
     const endSeries = (how) => {
@@ -183,4 +185,4 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
   };
 }
 
-module.exports = { readPair, pickBest, createMultiEngine, MIN_CANDLES };
+module.exports = { readPair, pickBest, createMultiEngine, pairKey, MIN_CANDLES };

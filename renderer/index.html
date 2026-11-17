@@ -39,6 +39,9 @@
     </div>
   </div>
 
+  <!-- Varios pares a la vez: el marco y el escáner de cada gráfica -->
+  <div id="mzones"></div>
+
   <!-- Capa para dibujar la zona con el raton -->
   <div id="selector" class="hidden">
     <div id="sel-hint">Arrastra un recuadro sobre las velas de la gráfica (Esc para cancelar)</div>
@@ -133,6 +136,14 @@
       <div class="buttons">
         <button id="btn-zone">Marcar gráfica</button>
         <button id="btn-auto">Escáner: ON</button>
+      </div>
+      <!-- Varios pares a la vez: una zona y un par por gráfica -->
+      <div id="multi-settings">
+        <label class="mcheck" title="El bot analiza estos pares a la vez (con las velas de 15 s que él mismo recibe), entra en el que tenga la mejor lectura y, si pierde, busca la martingala entre todos. Solo en automático y en la DEMO."><input id="multi-on" type="checkbox" /> Varios pares a la vez (hasta 4)</label>
+        <div class="mrow"><button class="mz-btn" data-i="0" title="Arrastra un recuadro sobre las velas de la gráfica 1. Ahí se pinta el escáner de ese par.">Marcar gráfica 1</button><input class="mz-pair" data-i="0" type="text" maxlength="40" placeholder="par, p. ej. EUR/USD OTC" title="El par que tienes en la gráfica 1, escrito como en Pocket." /><button class="mz-clear" data-i="0" title="Quita la zona de la gráfica 1">✕</button></div>
+        <div class="mrow"><button class="mz-btn" data-i="1" title="Arrastra un recuadro sobre las velas de la gráfica 2. Ahí se pinta el escáner de ese par.">Marcar gráfica 2</button><input class="mz-pair" data-i="1" type="text" maxlength="40" placeholder="par, p. ej. EUR/USD OTC" title="El par que tienes en la gráfica 2, escrito como en Pocket." /><button class="mz-clear" data-i="1" title="Quita la zona de la gráfica 2">✕</button></div>
+        <div class="mrow"><button class="mz-btn" data-i="2" title="Arrastra un recuadro sobre las velas de la gráfica 3. Ahí se pinta el escáner de ese par.">Marcar gráfica 3</button><input class="mz-pair" data-i="2" type="text" maxlength="40" placeholder="par, p. ej. EUR/USD OTC" title="El par que tienes en la gráfica 3, escrito como en Pocket." /><button class="mz-clear" data-i="2" title="Quita la zona de la gráfica 3">✕</button></div>
+        <div class="mrow"><button class="mz-btn" data-i="3" title="Arrastra un recuadro sobre las velas de la gráfica 4. Ahí se pinta el escáner de ese par.">Marcar gráfica 4</button><input class="mz-pair" data-i="3" type="text" maxlength="40" placeholder="par, p. ej. EUR/USD OTC" title="El par que tienes en la gráfica 4, escrito como en Pocket." /><button class="mz-clear" data-i="3" title="Quita la zona de la gráfica 4">✕</button></div>
       </div>
       <div class="field">
         <label for="cycle" title="Igual que el tiempo de expiración de tu operación. 0 = una señal por vela.">Cada señal vale (segundos)</label>

@@ -159,6 +159,25 @@ html, body {
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
 }
 /* Varios pares a la vez */
+.mzone { position: fixed; outline: 2px dashed #38bdf8; pointer-events: none; overflow: hidden; }
+.mzone.pick { outline: 2px solid #60a5fa; }
+.mzone.open { outline: 3px solid #facc15; }
+.mzone.win { outline: 3px solid #4ade80; }
+.mzone.loss { outline: 3px solid #f87171; }
+.mzone .mbeam { position: absolute; top: 0; bottom: 0; left: -140px; width: 140px; animation: scan-sweep 1.3s linear infinite;
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0) 0%, rgba(56, 189, 248, .16) 70%, rgba(125, 211, 252, .6) 97%, #e0f2fe 100%); }
+.mzone.off .mbeam { display: none; }
+.mzone .mlabel { position: absolute; left: 6px; top: 6px; padding: 2px 7px; border-radius: 5px; font-size: 11px; font-weight: 800;
+  color: #e5e7eb; background: rgba(15, 23, 42, .88); border: 1px solid rgba(148, 163, 184, .5); white-space: nowrap; }
+.mzone .mlabel.up { color: #052e16; background: #4ade80; border-color: #4ade80; }
+.mzone .mlabel.down { color: #450a0a; background: #f87171; border-color: #f87171; }
+.mzone.open .mlabel { color: #111827; background: #facc15; border-color: #facc15; }
+#multi-settings { margin: 6px 0; padding: 6px; border-radius: 8px; border: 1px solid rgba(148, 163, 184, .3); }
+#multi-settings .mcheck { display: block; font-size: 11px; font-weight: 700; margin-bottom: 4px; }
+#multi-settings .mrow { display: flex; gap: 4px; margin-top: 3px; }
+#multi-settings .mrow button { flex: 0 0 auto; font-size: 10.5px; padding: 3px 6px; }
+#multi-settings .mrow button.set { background: #0e7490; color: #fff; }
+#multi-settings .mrow input { flex: 1 1 auto; min-width: 0; font-size: 11px; }
 #multi { margin: 6px 0; padding: 6px 8px; border-radius: 9px; background: rgba(15, 23, 42, .85); border: 1px solid rgba(148, 163, 184, .35); font-size: 11px; }
 #multi .mh { font-weight: 900; letter-spacing: .5px; font-size: 10px; text-transform: uppercase; opacity: .85; margin-bottom: 3px; }
 #multi .mr { display: flex; justify-content: space-between; gap: 6px; padding: 2px 4px; border-radius: 5px; }
