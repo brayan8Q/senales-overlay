@@ -96,6 +96,8 @@ function createBotBridge({ dir = null, request = httpRequest } = {}) {
     order: (payload) => call('POST', '/orden', payload, 9500),
     /** Precio de ahora de todos los pares que sigue el bot: { ok, prices: [[símbolo, nombre, precio, edad s, pago]] }. */
     prices: () => call('GET', '/precios', null, 1500),
+    /** Velas de 15 s de varios pares a la vez: { ok, seconds, pairs: [[símbolo, nombre, pago, cerradas, en curso, edad s, s abierta]] }. */
+    candles: (pairs) => call('GET', `/velas?pares=${encodeURIComponent((pairs || []).join(','))}`, null, 1500),
     /** Espera el resultado que da Pocket de esa operación. */
     result: (id, seconds) => call('GET', `/resultado?id=${encodeURIComponent(id)}`, null, (Number(seconds) + 25) * 1000),
   };

@@ -683,6 +683,36 @@ api.onState((s) => {
         : 'Leyendo los píxeles de la pantalla (la fuente interna está apagada en ⚙).';
   }
 
+  // --- Varios pares a la vez (16 nov 2026): la lectura de cada par, dónde está el bot y cómo va la cuenta ---
+  const multiBox = $('multi');
+  const mu = s.multi;
+  multiBox.classList.toggle('hidden', !mu || !mu.on);
+  if (mu && mu.on) {
+    const arrow = { up: '▲ ARRIBA', down: '▼ ABAJO' };
+    multiBox.textContent = '';
+    const add = (cls, text) => {
+      const el = document.createElement('div');
+      el.className = cls;
+      el.textContent = text;
+      multiBox.appendChild(el);
+      return el;
+    };
+    const o = mu.order;
+    add('mh', o ? `${mu.pairs.length} pares · el bot está en ${o.name}${o.level ? ` · martingala ${o.level}` : ''}${o.amount ? ` · $${Number(o.amount).toFixed(2)}` : ''}` : `${mu.pairs.length} pares a la vez${mu.level ? ` · buscando la martingala ${mu.level}` : ''}`);
+    for (const p of mu.pairs) {
+      const row = add(`mr${o && o.name === p.name ? ' open' : !o && mu.pick === p.name ? ' pick' : ''}`, '');
+      const left = document.createElement('span');
+      left.textContent = `${p.name}${p.payout ? ` · ${p.payout} %` : ''}`;
+      const right = document.createElement('span');
+      right.className = p.dir || 'flat';
+      right.textContent = !p.ready ? 'juntando velas' : p.stale ? 'sin precio' : p.dir ? `${arrow[p.dir]} · ${p.margin} de ventaja · ${p.pattern}` : 'sin lado claro';
+      row.append(left, right);
+    }
+    const t = mu.tally;
+    const lastText = mu.last ? `Última: ${mu.last.name} ${mu.last.dir === 'up' ? '▲' : '▼'} ${mu.last.result === 'win' ? 'ganó' : mu.last.result === 'loss' ? 'perdió' : 'empató'} (${mu.last.net >= 0 ? '+' : ''}${Number(mu.last.net).toFixed(2)}) · ` : '';
+    add('mf', `${lastText}Lleva ${t.wins} G / ${t.losses} P / ${t.ties} E · neto ${t.net >= 0 ? '+' : ''}${t.net.toFixed(2)}${t.lost ? ` · series perdidas ${t.lost}` : ''}${mu.note ? ` · ${mu.note}` : ''}`);
+  }
+
   // --- Bot en DEMO: disponible, en pausa (y por qué) o qué hizo con la orden de esta señal ---
   const botChip = $('bot-chip');
   const b = s.bot;

@@ -158,6 +158,14 @@ html, body {
   font-size: 10.5px; margin-top: 4px; opacity: .92; line-height: 1.25;
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
 }
+/* Varios pares a la vez */
+#multi { margin: 6px 0; padding: 6px 8px; border-radius: 9px; background: rgba(15, 23, 42, .85); border: 1px solid rgba(148, 163, 184, .35); font-size: 11px; }
+#multi .mh { font-weight: 900; letter-spacing: .5px; font-size: 10px; text-transform: uppercase; opacity: .85; margin-bottom: 3px; }
+#multi .mr { display: flex; justify-content: space-between; gap: 6px; padding: 2px 4px; border-radius: 5px; }
+#multi .mr.pick { background: rgba(37, 99, 235, .35); font-weight: 800; }
+#multi .mr.open { background: rgba(234, 179, 8, .35); font-weight: 800; }
+#multi .up { color: #4ade80; } #multi .down { color: #f87171; } #multi .flat { opacity: .6; }
+#multi .mf { margin-top: 4px; font-size: 10.5px; opacity: .95; }
 #signal-source {
   position: absolute; top: 4px; right: 6px; font-size: 9px; font-weight: 800;
   letter-spacing: .5px; text-transform: uppercase; opacity: .75;
