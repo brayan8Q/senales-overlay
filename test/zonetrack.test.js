@@ -1,0 +1,67 @@
+// Seguimiento de la vela actual en una zona (16 nov 2026): nunca se marca una vela anterior.
+const test = require('node:test');
+const assert = require('node:assert');
+const { trackZone, pitchOf } = require('../src/zonetrack');
+
+// Velas del bot en precios y su dibujo en pantalla: fila = 400 − (precio − 100) × 1000; unidades de pantalla = −fila.
+const A = -500;
+const B = 1; // unidades de pantalla = −fila = −400 + (precio − 100) × 1000 → con precios ×1000: valor = A + B × p
+const prices = [];
+let p = 100200;
+for (let i = 0; i < 20; i++) {
+  const open = p;
+  const close = p + (i % 3 === 0 ? -35 : 28) + (i % 5) * 3;
+  prices.push({ open, close, high: Math.max(open, close) + 9 + (i % 4), low: Math.min(open, close) - 7 - (i % 3) });
+  p = close;
+}
+const toPx = (c, i) => ({ x0: 20 + i * 14, x1: 20 + i * 14 + 9, open: A + B * c.open, close: A + B * c.close, high: A + B * c.high, low: A + B * c.low, dir: c.close >= c.open ? 'up' : 'down' });
+const closed = prices.slice(0, 19);
+const forming = prices[19];
+const book = { closed, forming, openFor: 6 };
+const screenAll = prices.map(toPx); // la pantalla ve las 19 cerradas y la que va en curso
+const screenNoForming = closed.map(toPx); // la vela en curso no se detecta (recien abierta, o tapada)
+
+test('la separacion entre velas se mide de las ultimas vistas', () => {
+  assert.strictEqual(pitchOf(screenAll), 14);
+  assert.strictEqual(pitchOf(screenAll.slice(0, 1)), 0);
+});
+
+test('si la pantalla ve la vela en curso, se marca en su sitio y con los precios del bot', () => {
+  const out = trackZone({ candles: screenAll, book, now: 100000 });
+  assert.ok(out.exact && out.current);
+  assert.strictEqual(out.current.x0, screenAll[19].x0);
+  assert.strictEqual(out.marks.length, 19);
+  assert.ok(Math.abs(out.current.close - (A + B * forming.close)) < 0.5);
+});
+
+test('si la pantalla NO ve la vela en curso, va un paso a la derecha: no se marca la anterior', () => {
+  const out = trackZone({ candles: screenNoForming, book, now: 100000 });
+  assert.ok(out.exact && out.current);
+  assert.strictEqual(out.current.x0, screenNoForming[18].x0 + 14);
+  assert.strictEqual(out.marks.length, 19); // todas las vistas son cerradas
+  assert.ok(Math.abs(out.current.open - (A + B * forming.open)) < 0.5);
+});
+
+test('una lectura que no cuadra sostiene el ultimo dibujo unos segundos y despues lo quita', () => {
+  const first = trackZone({ candles: screenAll, book, now: 100000 });
+  const junk = screenAll.map((c, i) => ({ ...c, open: c.open + (i % 2 ? 60 : -45), close: c.close - (i % 3) * 40, high: c.high + 80, low: c.low - (i % 4) * 30 }));
+  const held = trackZone({ candles: junk, book, prev: first.track, now: 101000 });
+  assert.ok(held.current, 'se sostiene');
+  assert.strictEqual(held.current.x0, first.current.x0);
+  const gone = trackZone({ candles: junk, book, prev: held.track, now: 100000 + 4500 });
+  assert.strictEqual(gone.current, null);
+});
+
+test('dentro de la misma vela la posicion no retrocede', () => {
+  const first = trackZone({ candles: screenAll, book, now: 100000 });
+  // lectura mala: la pantalla pierde las dos ultimas velas y el ajuste, por si solo, pondria la actual mas atras
+  const worse = { closed: closed.slice(0, 18), forming: closed[18], openFor: 7 };
+  const out = trackZone({ candles: screenAll.slice(0, 19), book: worse, prev: first.track, now: 101000 });
+  assert.ok(out.current.x0 >= first.current.x0 - 7);
+});
+
+test('sin velas del bot se usa la mas a la derecha (como antes)', () => {
+  const out = trackZone({ candles: screenAll, book: null, now: 1 });
+  assert.strictEqual(out.exact, false);
+  assert.strictEqual(out.current.x0, screenAll[19].x0);
+});

@@ -457,7 +457,7 @@ function renderZoneCandles(el, scan, pair) {
     node.style.display = '';
   };
   const cur = scan && scan.current;
-  const list = scan ? scan.candles.slice(0, -1) : []; // la vela actual lleva su propio seguimiento
+  const list = scan ? scan.candles : []; // solo las cerradas: la vela actual lleva su propio seguimiento
   while (marks.children.length > list.length) marks.removeChild(marks.lastChild);
   while (marks.children.length < list.length) marks.appendChild(Object.assign(document.createElement('div'), { className: 'mmark' }));
   list.forEach((c, i) => px(marks.children[i], { left: c.x - 2, width: c.w + 4, top: c.y - 2, height: c.h + 4 }));
@@ -473,7 +473,7 @@ function renderZoneCandles(el, scan, pair) {
   now.className = `mnow ${cur.up ? 'up' : 'down'}`;
   px(info, { left: center, top: Math.max(34, cur.high - 8) });
   const secs = pair && Number.isFinite(pair.openFor) ? ` · vela de 15 s del bot: va en ${Math.max(0, Math.min(15, Math.round(pair.openFor)))}` : '';
-  info.textContent = `vela actual: ${cur.up ? 'verde' : 'roja'}${secs}`;
+  info.textContent = `vela actual: ${cur.up ? 'verde' : 'roja'}${secs}${scan.exact ? '' : ' · sin confirmar'}`;
 }
 
 /** Varios pares a la vez: cada gráfica con su marco, su haz y un letrero con la lectura de su par. */

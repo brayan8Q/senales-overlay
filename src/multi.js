@@ -80,6 +80,7 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
     tally: { wins: 0, losses: 0, ties: 0, net: 0, series: 0, lost: 0 },
     loggedAt: 0,
     restUntil: 0, // despues de cerrar una serie se analiza unos segundos antes de abrir otra
+    books: new Map(), // por par: las velas que dio el bot en la ultima vuelta (para dibujar la vela actual en su zona)
     lostIn: null, // par donde se perdio la ultima entrada de la serie en curso: la martingala sale en otro
     lostAt: 0,
     nextAt: 0, // uno a uno: respiro entre un resultado y la entrada siguiente
@@ -98,6 +99,7 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
       const answer = await bot.candles(cfg.pairs);
       if (!answer || !answer.ok) throw new Error((answer && answer.error) || 'el bot no dio las velas');
       const time = new Date(now());
+      state.books = new Map(answer.pairs.map(([, name, , closed, forming, , openFor]) => [pairKey(name), { closed: closed.slice(-30).map(toCandle), forming: toCandle(forming), openFor, at: now() }]));
       state.reads = answer.pairs.map(([symbol, name, payout, closed, forming, age, openFor]) => ({
         symbol, name, payout, age, candles: closed.length, openFor, up: forming[3] >= forming[0], read: readPair({ closed, forming, time, asset: name }),
       }));
@@ -186,6 +188,8 @@ function createMultiEngine({ bot, record, settings, now = Date.now }) {
 
   return {
     tick,
+    /** Velas del bot de ese par ({closed, forming, openFor, at}) o null. */
+    book: (name) => state.books.get(pairKey(name)) || null,
     /** Marcador a cero (la serie en curso sigue). */
     reset() {
       for (const key of Object.keys(state.tally)) state.tally[key] = 0;
