@@ -162,6 +162,9 @@ html, body {
 .mzone { position: fixed; outline: 2px dashed #38bdf8; pointer-events: none; overflow: hidden; }
 .mzone.pick { outline: 2px solid #60a5fa; }
 .mzone.open { outline: 3px solid #facc15; }
+.mzone.swap { outline: 3px dashed #fb923c; }
+.mzone.swap .mlabel { color: #111827; background: #fb923c; border-color: #fb923c; font-size: 12.5px; }
+.mzone.swap .mbeam { display: none; }
 .mzone.win { outline: 3px solid #4ade80; }
 .mzone.loss { outline: 3px solid #f87171; }
 .mzone .mbeam { position: absolute; top: 0; bottom: 0; left: -140px; width: 140px; animation: scan-sweep 1.3s linear infinite;

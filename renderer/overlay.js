@@ -466,7 +466,7 @@ function renderZoneCandles(el, scan, pair) {
     if (scan && scan.misfit) {
       // Hay velas a la vista pero no son las de 15 s que lee el bot: se dice cómo arreglarlo.
       px(info, { left: el.clientWidth / 2, top: el.clientHeight / 2 });
-      info.textContent = 'Estas velas no casan con las del par escrito: revisa el par o pon la gráfica en M3 o M10';
+      info.textContent = 'Esta gráfica no es la del par de arriba: cámbiala en Pocket (el bot ya opera ese par)';
     }
     return;
   }
@@ -513,9 +513,14 @@ function renderMultiZones(s) {
     let cls = 'mzone';
     let text = `${i + 1} · ${slot.name || 'sin par'}`;
     let tone = '';
+    // La gráfica que se ve no es la del par de este lugar (el panel lo cambió solo, o cambió el usuario la gráfica).
+    const wrongChart = Boolean(slot.scan && slot.scan.misfit && slot.name);
     if (!mu.on) {
       cls += ' off';
       text += ` · en espera: ${mu.why || 'apagado'}`;
+    } else if (wrongChart && !o) {
+      cls += ' swap';
+      text = `${i + 1} · PON AQUÍ ${slot.name}${p && p.payout ? ` (paga ${p.payout} %)` : ''}${slot.swap ? ` · ${slot.swap.from} dejó de pagar bien` : ''}`;
     } else if (!slot.name) {
       cls += ' off';
       text += ' · escribe el par en ajustes';

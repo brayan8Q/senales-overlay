@@ -43,6 +43,7 @@ const { countOrderMark, MARK_MIN } = require('./src/ordermark');
 const { createBotBridge } = require('./src/botbridge');
 const { createMultiEngine, pairKey } = require('./src/multi');
 const { trackZone } = require('./src/zonetrack');
+const { reviewPairs } = require('./src/autopairs');
 
 // PREDECIR con la vela ya avanzada: true = esperar a que abra la vela siguiente y analizar ahi;
 // false = analizar y predecir al momento de pulsar. El usuario pidio quitar la espera (13 nov 2026).
@@ -125,6 +126,7 @@ const config = {
   multiPairs: ['USD/BRL OTC', 'QAR/CNY OTC', 'USD/PKR OTC', 'GBP/JPY OTC'],
   multiMinMargin: 2, // lecturas de ventaja que se piden para entrar
   multiMinPayout: 90, // un par que paga menos no se opera (con 80 % hay que acertar 55.6 %; con 92 %, 52.1 %)
+  multiAuto: true, // los pares se cambian solos cuando dejan de pagar el minimo (ver src/autopairs.js)
   // Una zona de la pantalla por par (misma posicion que en multiPairs): ahi se pinta el escaner de ese par.
   multiZones: [null, null, null, null],
   manualMartin: false, // con el boton, la martingala NO sale por su cuenta (16 nov 2026); true = sale sola, como en automatico
@@ -758,7 +760,7 @@ function saveAutoShot(image, badges) {
 }
 
 // Version del panel, para separar en el registro lo medido antes y despues de cada cambio.
-const BUILD = '2026-11-16n el recuadro de la vela actual ya no se desfasa (va en la casilla que sigue a la ultima cerrada) · no se aferra a un par donde acaba de perder · 2026-11-16m la vela actual tambien se sigue con la grafica en M10 (velas de 30 s) · 2026-11-16l la zona avisa si las velas de la pantalla no son de 15 s · 2026-11-16k la vela actual de cada zona se ubica con las velas del bot (ya no regresa a la anterior) · 2026-11-16j sin martingala y solo con confianza alta (5+ lecturas de ventaja) · 2026-11-16i uno a uno: 2 s de respiro entre un resultado y la entrada siguiente · marcador de varios pares a cero con Reiniciar · 2026-11-16h la martingala brinca a OTRO par · cada zona marca sus velas y sigue la vela actual · el marcador cuenta las operaciones de los pares · no se opera un par que pague menos de 90 % · 2026-11-16g cada par con su zona y su escaner en la pantalla (4 zonas en ajustes) · 2026-11-16f varios pares a la vez: el bot entra en el que tenga mejor lectura y busca la recuperacion entre todos · 2026-11-16e lecturas nuevas: MACD, volatilidad (ATR) y temporalidad mayor · lista de los pares que mas pagan ahora · 2026-11-16d el par de la grafica se reconoce solo (precio del eje contra los precios del bot) y el bot entra al pulsar PREDECIR en el par que tengas a la vista · 2026-11-16c con boton: PREDECIR contesta al instante, el escaner pasa siempre y el bot entra solo cuando pulsas (sin IA, sin vetos, sin martingala por su cuenta) · 2026-11-16b sin IA: el panel escanea y el bot opera solo con el seguimiento de la vela (color + milisegundos) · 2026-11-16a una sola IA (GPT-4.1 mini); el bot sigue el ritmo de la vela por su cuenta · 2026-11-15t la prediccion con IA arranca al INICIAR cada vela (no antes) y sale en cuanto contesta, dentro de esa vela · 2026-11-15s el haz del escaner pasa siempre (tambien mientras se espera la vela) · 2026-11-15r el analisis y la IA arrancan 2 s antes de cerrar la vela, siguen 1 s en la vela nueva y ahi sale la senal · 2026-11-15q letrero a la par de la vela (dice por que no entro en esta y cuando sale la proxima) · 2026-11-15p pago real del bot · la orden sale 150 ms antes de abrir la vela (entrada pegada a la apertura) · soporte y resistencia firmes · 2026-11-15o sin el reloj exacto de la vela no se predice (ni senal ni martingala a media vela) · 2026-11-15n la IA vuelve a contestar en las senales normales (plazo entero) y se le pregunta en el segundo 11.5 · 2026-11-15m la fuente interna (y con ella el reloj de la vela) ya no se suelta al abrir una operacion: solo tras 12 s sin cuadrar · 2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
+const BUILD = '2026-11-16o los pares se cambian solos cuando dejan de pagar el minimo y la zona dice que grafica poner · 2026-11-16n el recuadro de la vela actual ya no se desfasa (va en la casilla que sigue a la ultima cerrada) · no se aferra a un par donde acaba de perder · 2026-11-16m la vela actual tambien se sigue con la grafica en M10 (velas de 30 s) · 2026-11-16l la zona avisa si las velas de la pantalla no son de 15 s · 2026-11-16k la vela actual de cada zona se ubica con las velas del bot (ya no regresa a la anterior) · 2026-11-16j sin martingala y solo con confianza alta (5+ lecturas de ventaja) · 2026-11-16i uno a uno: 2 s de respiro entre un resultado y la entrada siguiente · marcador de varios pares a cero con Reiniciar · 2026-11-16h la martingala brinca a OTRO par · cada zona marca sus velas y sigue la vela actual · el marcador cuenta las operaciones de los pares · no se opera un par que pague menos de 90 % · 2026-11-16g cada par con su zona y su escaner en la pantalla (4 zonas en ajustes) · 2026-11-16f varios pares a la vez: el bot entra en el que tenga mejor lectura y busca la recuperacion entre todos · 2026-11-16e lecturas nuevas: MACD, volatilidad (ATR) y temporalidad mayor · lista de los pares que mas pagan ahora · 2026-11-16d el par de la grafica se reconoce solo (precio del eje contra los precios del bot) y el bot entra al pulsar PREDECIR en el par que tengas a la vista · 2026-11-16c con boton: PREDECIR contesta al instante, el escaner pasa siempre y el bot entra solo cuando pulsas (sin IA, sin vetos, sin martingala por su cuenta) · 2026-11-16b sin IA: el panel escanea y el bot opera solo con el seguimiento de la vela (color + milisegundos) · 2026-11-16a una sola IA (GPT-4.1 mini); el bot sigue el ritmo de la vela por su cuenta · 2026-11-15t la prediccion con IA arranca al INICIAR cada vela (no antes) y sale en cuanto contesta, dentro de esa vela · 2026-11-15s el haz del escaner pasa siempre (tambien mientras se espera la vela) · 2026-11-15r el analisis y la IA arrancan 2 s antes de cerrar la vela, siguen 1 s en la vela nueva y ahi sale la senal · 2026-11-15q letrero a la par de la vela (dice por que no entro en esta y cuando sale la proxima) · 2026-11-15p pago real del bot · la orden sale 150 ms antes de abrir la vela (entrada pegada a la apertura) · soporte y resistencia firmes · 2026-11-15o sin el reloj exacto de la vela no se predice (ni senal ni martingala a media vela) · 2026-11-15n la IA vuelve a contestar en las senales normales (plazo entero) y se le pregunta en el segundo 11.5 · 2026-11-15m la fuente interna (y con ella el reloj de la vela) ya no se suelta al abrir una operacion: solo tras 12 s sin cuadrar · 2026-11-15l la consulta a la IA vuelve al inicio del analisis (a 3 s del cierre no contestaba) + registro de consultas fallidas · letrero: a media vela solo se espera la vela nueva · 2026-11-15k confirmacion con la vela cerrada (si cambio de color, no entra) · la martingala tambien sale al abrir vela · 2026-11-15j la martingala se analiza (IA y reglas) y sigue hasta 4 seguidas · 2026-11-15i veto por patron segun el pago de ahora · analisis solo en su ventana (senal siempre al abrir la vela) · 2026-11-15h la prediccion sale al abrir cada vela nueva · 2026-11-15g la vela en curso se sigue por su hora (el marcador no se regresa) + numeros arriba del margen · automatico con el bot · 2026-11-15f fusion con el bot de Pocket en DEMO (el bot abre la operacion y da entrada, pago y resultado exactos) · 2026-11-15e la entrada se ve aunque caiga junto al globo de la operacion anterior · 2026-11-15d dos etapas: espera de entrada y plazo contado desde la entrada del usuario (tambien en la martingala) · 2026-11-15c el haz del escaner sigue pasando con la senal abierta · 2026-11-15b seguimiento de la senal con martingala (aviso si va perdiendo, MARTIN al perder) · 2026-11-15a estadistica por patron + auto-veto · veto anti-rebote · fuente interna (terminal demo) con respaldo de pixeles · 2026-11-13k freno para la IA (vela estirada / 4 velas seguidas) · senal por segundos exactos tambien en corto (3 s) · registro de motivos (A/M/C) · sin prediccion se libera en 10 s · plazos largos por segundos exactos (5 min) + % de confianza por plazo · zona de entrada de dos lineas + panel compacto + % de confianza medido · niveles medidos (80 velas) + marcador siempre en la vela actual + PREDECIR al momento (sin espera), vale hasta el cierre de la vela';
 
 /**
  * Reloj de la vela en curso, visto desde el momento en que de verdad empezara la operacion:
@@ -880,7 +882,7 @@ async function multiScanTick() {
         }
         multiTrack[i] = out.track;
         // Se ven velas pero no casan con las de 15 s del bot: la grafica esta en otra temporalidad (o es otro par).
-        if (fresh && !out.exact && candles.length >= 8) multiMisfit[i] = multiMisfit[i] || Date.now();
+        if (fresh && !out.exact && candles.length >= 5) multiMisfit[i] = multiMisfit[i] || Date.now();
         else multiMisfit[i] = 0;
         const cur = out.current;
         const top = cur ? Math.max(cur.open, cur.close) : 0;
@@ -1034,6 +1036,23 @@ async function followChartPair(now) {
 // que cambia la cuenta de verdad (con 92 % hay que acertar 52.1 %; con 80 %, 55.6 %); el acierto medido por
 // par no se distingue de 50 % en ninguno.
 let topPayouts = { at: 0, list: [], busy: false };
+let pairLow = [0, 0, 0, 0]; // por lugar: desde cuando su par paga menos del minimo
+let pairSwaps = [null, null, null, null]; // por lugar: el ultimo cambio automatico ({ from, to, at })
+/** Varios pares: el par de un lugar se cambia solo cuando lleva 20 s pagando menos del minimo. */
+function autoPairs(offers) {
+  if (!config.multi || !config.multiAuto || !multiOn() || offers.length < 8) return;
+  const out = reviewPairs({ slots: config.multiPairs, offers, minPayout: config.multiMinPayout, low: pairLow, now: Date.now() });
+  pairLow = out.low;
+  if (!out.changes.length) return;
+  for (const c of out.changes) {
+    config.multiPairs[c.index] = c.to;
+    multiTrack[c.index] = null;
+    pairSwaps[c.index] = { from: c.from, to: c.to, at: Date.now() };
+    record(`Q,${Date.now()},par,${c.index + 1},${c.to.replace(/[,\r\n]+/g, ' ')},auto,${c.from.replace(/[,\r\n]+/g, ' ')} pagaba ${c.was === null ? 'sin precio' : `${c.was} %`}`);
+  }
+  saveConfig();
+  publish();
+}
 async function refreshTopPayouts() {
   if (topPayouts.busy || !bot.status().online) return;
   topPayouts.busy = true;
@@ -1045,7 +1064,12 @@ async function refreshTopPayouts() {
       .sort((a, b) => b[4] - a[4] || String(a[1]).localeCompare(String(b[1])))
       .slice(0, 6)
       .map((r) => ({ name: String(r[1] || r[0]), payout: r[4] }));
+    // Todas las divisas con precio fresco y su pago: con eso se cambian solos los pares que dejan de pagar el minimo.
+    const offers = rows
+      .filter((r) => Array.isArray(r) && Number.isFinite(r[4]) && Number(r[3]) <= 5 && (r[5] === undefined || r[5] === null || r[5] === 'currency') && /otc$/i.test(String(r[0])))
+      .map((r) => ({ name: String(r[1] || r[0]), payout: r[4] }));
     topPayouts = { at: Date.now(), list, busy: false };
+    autoPairs(offers);
   } catch {
     topPayouts.busy = false;
   }
@@ -1385,6 +1409,7 @@ function loadConfig() {
     if (Array.isArray(saved.multiZones)) config.multiZones = [0, 1, 2, 3].map((i) => cleanZone(saved.multiZones[i]));
     if (Number.isFinite(saved.multiMinMargin)) config.multiMinMargin = Math.max(1, Math.min(8, Math.round(saved.multiMinMargin)));
     if (Number.isFinite(saved.multiMinPayout)) config.multiMinPayout = Math.max(50, Math.min(100, Math.round(saved.multiMinPayout)));
+    if (typeof saved.multiAuto === 'boolean') config.multiAuto = saved.multiAuto;
     if (typeof saved.aiOff === 'boolean') config.aiOff = saved.aiOff;
     if (typeof saved.aiOnly === 'string') config.aiOnly = saved.aiOnly;
     if (Number.isFinite(saved.entryDelayMs)) config.entryDelayMs = Math.max(0, Math.min(ENTRY_MAX_MS, saved.entryDelayMs));
@@ -1493,7 +1518,7 @@ function publish(statusOverride) {
       ...multi.view(),
       enabled: config.multi,
       why: config.multi && !multiOn() ? (config.manual ? 'solo funciona en automático (quita el botón PREDECIR en ajustes)' : !config.autoTrade ? 'el bot está apagado en ajustes' : !config.multiPairs.some(Boolean) ? 'falta escribir los pares' : 'el bot no está abierto') : '',
-      slots: config.multiPairs.map((name, i) => ({ name, key: pairKey(name), zone: config.multiZones[i], scan: config.multiZones[i] ? multiScan[i] : null })),
+      slots: config.multiPairs.map((name, i) => ({ name, key: pairKey(name), zone: config.multiZones[i], scan: config.multiZones[i] ? multiScan[i] : null, swap: pairSwaps[i] })),
     },
     // Dos etapas: mientras se espera la entrada del usuario, cuanto le queda; y si ya entro, hace cuanto.
     entryWait: last.entryWait || null,
@@ -2393,6 +2418,8 @@ ipcMain.on('set-multi-pair', (_e, index, value) => {
   if (!(i >= 0 && i < 4)) return;
   config.multiPairs[i] = String(value || '').trim().slice(0, 40);
   multiTrack[i] = null; // otro par: otra recta
+  pairSwaps[i] = null;
+  pairLow[i] = 0;
   saveConfig();
   record(`Q,${Date.now()},par,${i + 1},${config.multiPairs[i].replace(/[,\r\n]+/g, ' ')}`);
   publish();
@@ -2569,7 +2596,7 @@ if (!app.requestSingleInstanceLock()) {
     setInterval(scanTick, SCAN_INTERVAL_MS);
     setInterval(checkPhotoRequest, 1000);
     setInterval(readVisorPayout, 3000);
-    setInterval(refreshTopPayouts, 15000);
+    setInterval(refreshTopPayouts, 5000);
     setInterval(() => multi.tick().catch(() => {}), 1000);
     setInterval(() => multiScanTick().catch(() => {}), 350);
     // Estado del bot de Pocket (si esta abierto). Cada cambio queda en el registro:
